@@ -1,30 +1,44 @@
+# ── Node ──────────────────────────────────────────────────────────────────────
 node_modules/
 dist/
-datasets/
-models/
-venv/
-.venv/
-.env
-.env.*
-.DS_Store
+.cache/
+
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *.pyo
 *.pyd
-backend/__pycache__/
-backend/**/__pycache__/
-backend/**/*.pyc
-*.log
-.vscode/
-patch*.cjs
-patch_*.cjs
+*.egg-info/
+.eggs/
+venv/
+.venv/
+*.out
 
-# Large binary assets (GLB 3D models)
+# ── Environment & secrets ─────────────────────────────────────────────────────
+.env
+.env.*
+
+# ── OS junk ───────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.claude/
+
+# ── Large binary assets ───────────────────────────────────────────────────────
 *.glb
 *.gltf
 
-# Large data files
+# ── Data, model artifacts & logs (large / regenerable) ───────────────────────
 backend/data/
 backend/models/
 backend/results/
 backend/logs/
+
+# ── Misc scratch files ────────────────────────────────────────────────────────
+patch*.cjs
+patch_*.cjs
+test-import.js
+*.log
