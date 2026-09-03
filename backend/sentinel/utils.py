@@ -46,7 +46,7 @@ def compute_run_length(std_series, threshold=0.001):
     run_lengths = is_flat.groupby(groups).cumsum()
     return run_lengths.values
 
-def extract_rolling_features(segments_df, window_size=20, include_duration=True):
+def extract_rolling_features(segments_df, window_size=20, include_duration=True, show_progress=False):
     """
     Extracts row-level features from raw segments for the production pipeline.
     """
@@ -66,10 +66,9 @@ def extract_rolling_features(segments_df, window_size=20, include_duration=True)
         return np.column_stack([inv_std, runs])
 
     feats = []
-    # Use tqdm if available, otherwise fallback
     try:
         from tqdm import tqdm
-        for name, group in tqdm(segments_df.groupby('segment'), desc="Extracting features"):
+        for name, group in tqdm(segments_df.groupby('segment'), desc="Extracting features", disable=not show_progress):
             feats.append(_segment_features(group))
     except ImportError:
         for name, group in segments_df.groupby('segment'):

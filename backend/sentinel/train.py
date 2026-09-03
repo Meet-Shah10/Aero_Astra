@@ -52,7 +52,7 @@ def main():
     
     # 2. Feature Engineering
     log.info("Extracting rolling row-level features (duration and inverse std)...")
-    feats_df = extract_rolling_features(segments_df, window_size=20)
+    feats_df = extract_rolling_features(segments_df, window_size=20, show_progress=True)
     
     feature_cols = ['flatline_duration', 'log_inv_std']
     

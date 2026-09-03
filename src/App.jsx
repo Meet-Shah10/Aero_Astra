@@ -495,30 +495,30 @@ function App() {
               ]}
             />
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
-            <div style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: '8px', letterSpacing: '0.15em', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', fontWeight: 'bold' }}>UTC TIME</div>
-              <div style={{ fontFamily: 'monospace', fontSize: '13px', fontWeight: 'bold', color: '#EDEEF2', letterSpacing: '0.1em' }}><LiveClock /></div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: '8px', letterSpacing: '0.15em', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', fontWeight: 'bold' }}>UTC TIME</div>
+                <div style={{ fontFamily: 'monospace', fontSize: '13px', fontWeight: 'bold', color: '#EDEEF2', letterSpacing: '0.1em' }}><LiveClock /></div>
+              </div>
             </div>
           </div>
-        </div>
 
           {/* Row 2 — breadcrumb + MET */}
-      <div style={{
-        height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '0 32px', background: 'rgba(0,0,0,0.2)',
-      }}>
-        <div style={{ fontSize: '9px', fontFamily: 'monospace', letterSpacing: '0.1em', color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase' }}>
-          MISSION CONTROL / {activeView === 'about' ? 'ABOUT' : 'DASHBOARD'} / <span style={{ color: '#EDEEF2', fontWeight: 'bold' }}>{activeView === 'about' ? 'AGENT ARCHITECTURE' : 'ANOMALY RESPONSE'}</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: '#00FF88', fontFamily: 'monospace', fontWeight: 'bold' }}>
-          <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#00FF88', display: 'inline-block', animation: 'blink-dots 1.5s infinite' }} />
-          {missionStart && <MetTimer start={missionStart} />}
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '9px', color: 'rgba(255,255,255,0.5)', fontFamily: 'monospace' }}>
-          SIGNAL: <span style={{ color: '#00FF88', fontWeight: 'bold' }}>LINK_NOMINAL</span>
-        </div>
-      </div>
+          <div style={{
+            height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '0 32px', background: 'rgba(0,0,0,0.2)',
+          }}>
+            <div style={{ fontSize: '9px', fontFamily: 'monospace', letterSpacing: '0.1em', color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase' }}>
+              MISSION CONTROL / {activeView === 'about' ? 'ABOUT' : 'DASHBOARD'} / <span style={{ color: '#EDEEF2', fontWeight: 'bold' }}>{activeView === 'about' ? 'AGENT ARCHITECTURE' : 'ANOMALY RESPONSE'}</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: '#00FF88', fontFamily: 'monospace', fontWeight: 'bold' }}>
+              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#00FF88', display: 'inline-block', animation: 'blink-dots 1.5s infinite' }} />
+              {missionStart && <MetTimer start={missionStart} />}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '9px', color: 'rgba(255,255,255,0.5)', fontFamily: 'monospace' }}>
+              SIGNAL: <span style={{ color: '#00FF88', fontWeight: 'bold' }}>LINK_NOMINAL</span>
+            </div>
+          </div>
     </header>
   ) : (
     /* Landing / Loader header — exactly matching orbital-tomb */
