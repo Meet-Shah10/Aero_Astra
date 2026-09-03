@@ -18,3 +18,13 @@ backend/**/*.pyc
 .vscode/
 patch*.cjs
 patch_*.cjs
+
+# Large binary assets (GLB 3D models)
+*.glb
+*.gltf
+
+# Large data files
+backend/data/
+backend/models/
+backend/results/
+backend/logs/
