@@ -1,0 +1,41 @@
+2026-08-25 11:25:18,918 [INFO] ============================================================
+2026-08-25 11:25:18,918 [INFO] SENTINEL — ROW-LEVEL EVALUATION (ISOLATION FOREST)
+2026-08-25 11:25:18,918 [INFO] ============================================================
+2026-08-25 11:25:18,918 [INFO] Loading feature dataset: /Users/meetshah1004/Desktop/Meet/Banglore_Space/Aero_Astra/backend/data/raw/opssat/dataset.csv
+2026-08-25 11:25:18,932 [INFO] Loading raw segments: /Users/meetshah1004/Desktop/Meet/Banglore_Space/Aero_Astra/backend/data/raw/opssat/segments.csv
+2026-08-25 11:25:19,173 [INFO] Training on FULL pure_train split (normal + anomalies mixed, unsupervised) using true_contamination=0.1991.
+2026-08-25 11:25:19,300 [INFO] Broadcasting IF & OCSVM segment anomaly scores to row level...
+2026-08-25 11:25:19,350 [INFO] Row-Level Test Set Size: 78315
+2026-08-25 11:25:19,350 [INFO] Fitting normalization bounds strictly on Train + Val splits...
+2026-08-25 11:25:19,355 [INFO] 
+============================================================
+EVALUATION: One-Class SVM (Baseline Row-Level)
+============================================================
+2026-08-25 11:25:19,363 [INFO]   Precision : 0.4612
+  Recall    : 0.3683
+  F1 Score  : 0.4095
+2026-08-25 11:25:19,365 [INFO] 
+Confusion Matrix:
+[[37145 12385]
+ [18184 10601]]
+2026-08-25 11:25:19,366 [INFO] Unique if_norm scores in Validation Set: 318 out of 47948 rows
+2026-08-25 11:25:19,366 [INFO] Validation Anomaly Rate: 0.3237
+2026-08-25 11:25:19,366 [INFO] Test Set Anomaly Rate: 0.3676
+2026-08-25 11:25:19,863 [INFO]   Tuned IF Threshold on Val: 0.88 (Val F1: 0.0068, Val Prec: 1.0000)
+2026-08-25 11:25:19,863 [INFO] 
+============================================================
+EVALUATION: Isolation Forest (PRODUCTION Model Row-Level)
+============================================================
+2026-08-25 11:25:19,870 [INFO]   Precision : 1.0000
+  Recall    : 0.0013
+  F1 Score  : 0.0026
+2026-08-25 11:25:19,875 [INFO]   ROC-AUC   : 0.5661
+2026-08-25 11:25:19,876 [INFO] 
+Confusion Matrix:
+[[49530     0]
+ [28748    37]]
+2026-08-25 11:25:19,876 [INFO] 
+============================================================
+SENTINEL REVISION COMPLETE
+============================================================
+2026-08-25 11:25:19,876 [INFO]   IF (Production) F1 : 0.0026

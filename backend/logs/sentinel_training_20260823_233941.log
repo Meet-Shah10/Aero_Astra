@@ -1,0 +1,8 @@
+2026-08-23 23:39:41,395 [INFO] ============================================================
+2026-08-23 23:39:41,395 [INFO] SENTINEL — Satellite Anomaly Detection Training
+2026-08-23 23:39:41,395 [INFO] AERO-ASTRA | Agent 1
+2026-08-23 23:39:41,395 [INFO] Started: 2026-08-23T23:39:41.395242
+2026-08-23 23:39:41,395 [INFO] ============================================================
+2026-08-23 23:39:41,395 [INFO] Loading feature dataset: /Users/meetshah1004/Desktop/Meet/Banglore_Space/Aero_Astra/data/raw/opssat/dataset.csv
+2026-08-23 23:39:41,408 [INFO]   Shape: (2123, 23)
+2026-08-23 23:39:41,408 [INFO]   Columns (first 10): ['segment', 'anomaly', 'train', 'channel', 'sampling', 'duration', 'len', 'mean', 'var', 'std']

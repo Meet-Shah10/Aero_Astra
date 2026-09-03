@@ -1,275 +1,689 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { Canvas } from '@react-three/fiber';
 import ModelViewer from './components/ModelViewer';
+import Scene3D from './components/Scene3D';
 import './index.css';
 
-function App() {
-  const [currentView, setCurrentView] = useState('splash-1');
-  const [anomalyStatus, setAnomalyStatus] = useState(false);
-  const [guardianApproved, setGuardianApproved] = useState(false);
+// ─────────────────────────────────────────────────────────────────────────────
+//  Web Audio Beep
+// ─────────────────────────────────────────────────────────────────────────────
+const playBeep = () => {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(820, ctx.currentTime);
+    gain.gain.setValueAtTime(0.06, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.12);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.12);
+  } catch (e) { }
+};
 
-  const startTransition = () => {
-    setCurrentView('splash-2');
-    setTimeout(() => {
-      setCurrentView('dashboard');
-    }, 4500);
-  };
-
-  const toggleAnomaly = () => {
-    setAnomalyStatus(!anomalyStatus);
-    setGuardianApproved(false);
-  };
+// ─────────────────────────────────────────────────────────────────────────────
+//  Scrolling Hex Stream (left side of landing)
+// ─────────────────────────────────────────────────────────────────────────────
+function HexStream() {
+  const codes = useMemo(() =>
+    Array.from({ length: 30 }, () =>
+      '0x' + (0x100000 + Math.floor(Math.random() * 0xefffff)).toString(16).toUpperCase()
+    ), []);
 
   return (
-    <>
-      {currentView === 'splash-1' && (
-        <div className="splash-screen">
-          <ModelViewer
-            url="/simple_satellite_low_poly_free.glb"
-            width="100vw"
-            height="100vh"
-            modelYOffset={0.1} /* Pushes the model upwards slightly */
-            autoRotate={true}
-            autoRotateSpeed={0.5} 
-            enableManualZoom={false}
-            enableManualRotation={true}
-            enableMouseParallax={false}
-            environmentPreset="warehouse"
-            ambientIntensity={0.6}
-            keyLightIntensity={1}
-            defaultZoom={0.8}
-            minZoomDistance={0.5}
-            maxZoomDistance={2}
-            showScreenshotButton={false} 
-          />
-          
-          <div className="splash-text">
-            <h1 className="glitch-text">AERO-ASTRA</h1>
-            <button className="start-btn" onClick={startTransition}>
-              LET'S START
+    <div style={{
+      position: 'absolute', left: '2.5rem', top: '6rem', bottom: '6rem',
+      width: '5rem', overflow: 'hidden', pointerEvents: 'none', zIndex: 10,
+      maskImage: 'linear-gradient(to bottom, transparent 0%, black 20%, black 80%, transparent 100%)',
+      WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 20%, black 80%, transparent 100%)',
+    }}>
+      <div className="hex-scroll">
+        {codes.concat(codes).map((c, i) => <span key={i} style={{ display: 'block' }}>{c}</span>)}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Live UTC Clock
+// ─────────────────────────────────────────────────────────────────────────────
+function LiveClock() {
+  const [time, setTime] = useState('00:00:00');
+  useEffect(() => {
+    const tick = () => {
+      const now = new Date();
+      const h = String(now.getUTCHours()).padStart(2, '0');
+      const m = String(now.getUTCMinutes()).padStart(2, '0');
+      const s = String(now.getUTCSeconds()).padStart(2, '0');
+      setTime(`${h}:${m}:${s}`);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <span>{time}</span>;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  MET Timer
+// ─────────────────────────────────────────────────────────────────────────────
+function MetTimer({ start }) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [start]);
+  const h = String(Math.floor(elapsed / 3600)).padStart(2, '0');
+  const m = String(Math.floor((elapsed % 3600) / 60)).padStart(2, '0');
+  const s = String(elapsed % 60).padStart(2, '0');
+  return <span>MET {h}:{m}:{s}</span>;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Dashboard System Meter
+// ─────────────────────────────────────────────────────────────────────────────
+function SystemMeter({ label }) {
+  const [val, setVal] = useState(60);
+  useEffect(() => {
+    const update = () => setVal(40 + Math.floor(Math.random() * 50));
+    update();
+    const id = setInterval(update, 3000);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+      <span style={{ fontSize: '8px', color: 'rgba(255,255,255,0.3)', letterSpacing: '0.15em', fontWeight: 'bold', textTransform: 'uppercase' }}>{label}</span>
+      <div style={{ width: '40px', height: '3px', background: 'rgba(255,255,255,0.05)', borderRadius: '99px', overflow: 'hidden' }}>
+        <div style={{ width: `${val}%`, height: '100%', background: '#00E5FF', transition: 'width 0.8s ease' }} />
+      </div>
+      <span style={{ fontSize: '9px', color: 'rgba(0,229,255,0.85)', fontFamily: 'monospace', minWidth: '28px', textAlign: 'right' }}>{val}%</span>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Main App
+// ─────────────────────────────────────────────────────────────────────────────
+function App() {
+  // view states matching orbital-tomb flow:
+  // 'hero' = landing page with globe
+  // 'loading' = launched, camera dollying in, loading panel showing
+  // 'dashboard' = full mission control
+  const [launched, setLaunched] = useState(false);
+  const [showLoader, setShowLoader] = useState(false);
+  const [showDashboard, setShowDashboard] = useState(false);
+  const [loadStep, setLoadStep] = useState(0);
+  const [missionStart, setMissionStart] = useState(null);
+
+  // Dashboard states
+  const [scenarioPhase, setScenarioPhase] = useState('nominal');
+  const [guardianApproved, setGuardianApproved] = useState(false);
+  const [selectedMitigation, setSelectedMitigation] = useState(1);
+  const [logs, setLogs] = useState([
+    '> System booted successfully.',
+    '> Telemetry linked on band S7.',
+    '> SENTINEL: Monitoring 5 active assets.',
+  ]);
+
+  const loadMessages = [
+    '> BOOT: AERO-ASTRA MISSION CONTROL v2.5',
+    '> SENTINEL: Initializing anomaly detection engine...',
+    '> SHERLOCK: Loading causal dependency graph...',
+    '> ATHENA: Recovery plan modules standing by...',
+    '> ORACLE: Digital twin sync established...',
+    '> GUARDIAN: Safety gate armed and nominal...',
+    '> SCRIBE: Audit trail ready. All agents online.',
+  ];
+
+  // ── Launch sequence (exactly like orbital-tomb) ──
+  // 1. Set launched=true → Scene3D camera starts dollying in
+  // 2. After 800ms show the loader panel
+  // 3. After 3000ms total → show dashboard
+  const handleLaunch = () => {
+    playBeep();
+    setLaunched(true);
+
+    // After camera starts moving, show loading overlay
+    setTimeout(() => {
+      setShowLoader(true);
+      setLoadStep(0);
+      // Stagger load messages
+      loadMessages.forEach((_, i) => {
+        setTimeout(() => setLoadStep(i + 1), i * 260);
+      });
+    }, 800);
+
+    // Transition to dashboard
+    setTimeout(() => {
+      setShowDashboard(true);
+      setMissionStart(Date.now());
+    }, 3200);
+  };
+
+  // ── Dashboard scenario ──
+  const triggerAnomaly = () => {
+    if (scenarioPhase !== 'nominal' && scenarioPhase !== 'resolved') {
+      setScenarioPhase('nominal');
+      setGuardianApproved(false);
+      setSelectedMitigation(1);
+      setLogs(['> System reset.', '> Telemetry linked on band S7.', '> SENTINEL: Monitoring 5 active assets.']);
+      return;
+    }
+    setScenarioPhase('detected');
+    setLogs(prev => [...prev, '> ⚠ WARN: Anomaly detected at EPS Bus A.', '> SENTINEL: Correlation threshold exceeded.']);
+    setTimeout(() => {
+      setScenarioPhase('diagnosing');
+      setLogs(prev => [...prev, '> SHERLOCK: Building causal dependency graph...', '> SHERLOCK: Root cause isolated → EPS → TCS.']);
+      setTimeout(() => {
+        setScenarioPhase('planning');
+        setLogs(prev => [...prev, '> ATHENA: Generating recovery options.', '> QUARTERMASTER: Sandboxing mitigation options...']);
+        setTimeout(() => {
+          setScenarioPhase('awaiting_approval');
+          setLogs(prev => [...prev, '> GUARDIAN: Safety gate locked. Awaiting Approval.']);
+        }, 3000);
+      }, 3000);
+    }, 3000);
+  };
+
+  const handleApprove = (e) => {
+    setGuardianApproved(e.target.checked);
+    if (e.target.checked) setLogs(prev => [...prev, '> GUARDIAN: Safety Approval Granted.']);
+    else setLogs(prev => [...prev, '> GUARDIAN: Approval Revoked.']);
+  };
+
+  const executeRunbook = () => {
+    setScenarioPhase('executing');
+    setLogs(prev => [...prev,
+    `> SCRIBE: Executing Option ${selectedMitigation}.`,
+    selectedMitigation === 1 ? '> SCRIBE: Throttling EPS Bus A to 15%...' : '> SCRIBE: Initiating Emergency Shutoff...',
+      '> SCRIBE: Generating audit runbook.'
+    ]);
+    setTimeout(() => {
+      setScenarioPhase('resolved');
+      setLogs(prev => [...prev, '> SYSTEM: Telemetry nominal.', '> SCRIBE: Runbook finalized. Returning to monitoring.']);
+      setGuardianApproved(false);
+      const content = `AERO-ASTRA INCIDENT RUNBOOK\n============================\nDate: ${new Date().toISOString()}\nAgent: SCRIBE (Orchestrator)\n\nINCIDENT:\n- Trigger: Anomaly at EPS Bus A\n- Diagnosis (SHERLOCK): EPS Spike → TCS Thermal Build-up\n- Mitigation (ATHENA): Throttle EPS Bus A\n\nEXECUTION:\n- GUARDIAN: APPROVED\n- Action: EPS Bus A load → 15%\n- Result: Nominal.\n============================`;
+      const blob = new Blob([content], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'AERO_ASTRA_Runbook.txt'; a.click();
+      URL.revokeObjectURL(url);
+    }, 4000);
+  };
+
+  const isAnomaly = scenarioPhase !== 'nominal' && scenarioPhase !== 'resolved';
+
+  return (
+    <div style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden', background: '#05060F' }}>
+
+      {/* ── Scan lines always present ── */}
+      <div className="scan-lines" />
+
+      {/* ── Nebula BG ── */}
+      <div className="nebula-bg" />
+
+      {/* ══════════════════════════════════════════════════════
+          THREE.JS SCENE: Always mounted, camera dollies on launch
+          (same as orbital-tomb — persistent z-0 background)
+         ══════════════════════════════════════════════════════ */}
+      <Scene3D launched={launched} />
+
+      {/* ── Blueprint grid overlay (appears after launch, matches orbital-tomb) ── */}
+      {launched && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 10, opacity: 0.7,
+            backgroundImage: `
+              linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+              linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px)
+            `,
+            backgroundSize: '60px 60px',
+            maskImage: 'radial-gradient(circle at center, rgba(0,0,0,1) 35%, rgba(0,0,0,0) 85%)',
+            WebkitMaskImage: 'radial-gradient(circle at center, rgba(0,0,0,1) 35%, rgba(0,0,0,0) 85%)',
+          }}
+        />
+      )}
+
+      {/* ── Vignette ── */}
+      <div style={{
+        position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 40,
+        background: 'radial-gradient(circle, transparent 50%, rgba(0,0,0,0.35) 100%)',
+      }} />
+
+      {/* ════════════════════════════════════════════
+          HEADER  — matches orbital-tomb exactly
+         ════════════════════════════════════════════ */}
+      {showDashboard ? (
+        /* Dashboard header */
+        <header style={{
+          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 40,
+          background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(12px)',
+          borderBottom: '1px solid rgba(255,255,255,0.1)',
+          display: 'flex', flexDirection: 'column',
+        }}>
+          {/* Row 1 */}
+          <div style={{
+            height: '56px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '0 32px', borderBottom: '1px solid rgba(255,255,255,0.05)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#00E5FF" strokeWidth="1.5">
+                <circle cx="12" cy="12" r="10" />
+                <polygon points="12,6 6,16 18,16" strokeLinejoin="round" />
+              </svg>
+              <span className="font-bold" style={{ letterSpacing: '0.3em', fontSize: '15px', color: '#fff' }}>AERO-ASTRA</span>
+            </div>
+
+            <div style={{ display: 'flex', gap: '32px' }}>
+              {['DASHBOARD', 'TARGETS', 'MISSIONS'].map(link => (
+                <span key={link} style={{
+                  fontSize: '11px', letterSpacing: '0.2em', fontWeight: 'bold', cursor: 'pointer',
+                  color:link === 'DASHBOARD' ? '#00E5FF' : 'rgba(255,255,255,0.4)',
+                }}>{link}</span>
+              ))}
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: '8px', letterSpacing: '0.15em', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', fontWeight: 'bold' }}>UTC TIME</div>
+              <div style={{ fontFamily: 'monospace', fontSize: '13px', fontWeight: 'bold', color: '#00E5FF', letterSpacing: '0.1em' }}><LiveClock /></div>
+            </div>
+          </div>
+        </div>
+
+          {/* Row 2 — breadcrumb + MET */}
+      <div style={{
+        height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '0 32px', background: 'rgba(0,0,0,0.2)',
+      }}>
+        <div style={{ fontSize: '9px', fontFamily: 'monospace', letterSpacing: '0.1em', color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase' }}>
+          MISSION CONTROL / DASHBOARD / <span style={{ color: '#00E5FF', fontWeight: 'bold' }}>ANOMALY RESPONSE</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: '#00FF88', fontFamily: 'monospace', fontWeight: 'bold' }}>
+          <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#00FF88', display: 'inline-block', animation: 'blink-dots 1.5s infinite' }} />
+          {missionStart && <MetTimer start={missionStart} />}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '9px', color: 'rgba(255,255,255,0.5)', fontFamily: 'monospace' }}>
+          SIGNAL: <span style={{ color: '#00FF88', fontWeight: 'bold' }}>LINK_NOMINAL</span>
+        </div>
+      </div>
+    </header>
+  ) : (
+    /* Landing / Loader header — exactly matching orbital-tomb */
+    <header style={{
+      position: 'fixed', top: 0, left: 0, right: 0, height: '64px', zIndex: 40,
+      background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(8px)',
+      borderBottom: '1px solid rgba(255,255,255,0.07)',
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#00E5FF" strokeWidth="1.5">
+          <circle cx="12" cy="12" r="10" />
+          <polygon points="12,6 6,16 18,16" strokeLinejoin="round" />
+        </svg>
+        <span style={{ fontSize: '10px', letterSpacing: '0.25em', color: 'rgba(255,255,255,0.4)', fontWeight: 'bold', textTransform: 'uppercase' }}>
+          SEC_LEVEL // 04
+        </span>
+      </div>
+
+      <h1 style={{ margin: 0, fontSize: 'clamp(14px,1.5vw,18px)', letterSpacing: '0.3em', fontWeight: 'bold', color: '#fff' }}>
+        AERO-ASTRA
+      </h1>
+
+      <div style={{ textAlign: 'right' }}>
+        <div style={{ fontSize: '8px', letterSpacing: '0.15em', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', fontWeight: 'bold' }}>
+          COORDINATED UNIVERSAL TIME
+        </div>
+        <div style={{ fontFamily: 'monospace', fontSize: '14px', fontWeight: 'bold', color: '#00E5FF', letterSpacing: '0.1em' }}>
+          <LiveClock />
+        </div>
+      </div>
+    </header>
+  )
+}
+
+{/* ════════════════════════════════════════════
+          VIEW 1 — HERO (landing, globe visible behind)
+         ════════════════════════════════════════════ */}
+{
+  !launched && (
+    <main className="landing-main" style={{ zIndex: 20 }}>
+      {/* Left hex stream */}
+      <HexStream />
+
+      <div className="hero-tag">AUTONOMOUS SATELLITE MISSION OPS</div>
+
+      <h2 className="hero-title">AERO-ASTRA</h2>
+
+      <p className="hero-sub">Intelligent multi-agent AI for autonomous anomaly response.</p>
+
+      <div className="hero-status">
+        TELEMETRY SYNCED &middot; MULTI-AGENT ACTIVE &middot; OPSSAT-AD LIVE
+      </div>
+
+      <button className="launch-btn" onClick={handleLaunch} id="launch-mission-control">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0 }}>
+          <circle cx="12" cy="12" r="10" />
+          <line x1="22" y1="12" x2="18" y2="12" />
+          <line x1="6" y1="12" x2="2" y2="12" />
+          <line x1="12" y1="6" x2="12" y2="2" />
+          <line x1="12" y1="22" x2="12" y2="18" />
+        </svg>
+        LAUNCH MISSION CONTROL
+      </button>
+
+      {/* Coordinate corner decoration */}
+      <div style={{
+        position: 'absolute', bottom: '2rem', left: '2.5rem',
+        fontFamily: 'monospace', fontSize: '8px', color: 'rgba(255,255,255,0.2)',
+        letterSpacing: '0.15em', lineHeight: 1.8,
+      }}>
+        <div>LAT: 28.6139° N</div>
+        <div>LON: 77.2090° E</div>
+        <div>ALT: 540 KM</div>
+      </div>
+    </main>
+  )
+}
+
+{/* ════════════════════════════════════════════
+          VIEW 2 — LOADER PANEL
+          (shown while camera dollies in, sat GLB pops)
+         ════════════════════════════════════════════ */}
+{
+  launched && !showDashboard && showLoader && (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 30,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }}>
+      {/* Satellite GLB centered (pops from behind) */}
+      <div className="model-pop-anim" style={{
+        position: 'absolute', inset: 0,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        <ModelViewer
+          url="/gun_satellite_panel_computer.glb"
+          width="100vw"
+          height="100vh"
+          autoRotate={false}
+          autoRotateSpeed={0.3}
+          enableManualZoom={false}
+          enableManualRotation={false}
+          enableHoverRotation={false}
+          enableMouseParallax={false}
+          environmentPreset="studio"
+          ambientIntensity={0.25}
+          keyLightIntensity={0.6}
+          fillLightIntensity={0.3}
+          rimLightIntensity={0.5}
+          defaultRotationX={0}
+          defaultRotationY={90}
+          defaultZoom={0.85}
+          minZoomDistance={0.85}
+          showScreenshotButton={false}
+        />
+      </div>
+
+      {/* Loading panel at bottom */}
+      <div style={{
+        position: 'absolute', bottom: '3rem', left: '50%', transform: 'translateX(-50%)',
+        width: '100%', maxWidth: '540px', zIndex: 10,
+      }}>
+        <div className="transition-panel">
+          {/* Spinner */}
+          <div style={{ position: 'relative', width: '48px', height: '48px', margin: '0 auto 20px' }}>
+            <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', border: '1px solid rgba(255,255,255,0.05)' }} />
+            <div className="spin-ring" />
+          </div>
+
+          <div style={{ fontSize: '10px', letterSpacing: '0.3em', color: '#00E5FF', textTransform: 'uppercase', fontWeight: 'bold', marginBottom: '6px' }}>
+            INITIALIZING MISSION CONTROL...
+          </div>
+          <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginBottom: '16px' }}>
+            Multi-agent anomaly response system coming online
+          </div>
+
+          {/* Sequential log messages */}
+          <div className="transition-log">
+            {loadMessages.slice(0, loadStep).map((msg, i) => (
+              <div key={i} style={{
+                color: i === loadStep - 1 ? '#00E5FF' : 'rgba(0,229,255,0.4)',
+                marginBottom: '3px', fontSize: '10px', fontFamily: 'monospace', letterSpacing: '0.08em',
+              }}>
+                {i < loadStep - 1 && <span style={{ color: '#00FF88', marginRight: '4px' }}>✓</span>}
+                {i === loadStep - 1 && <span style={{ color: '#00E5FF', marginRight: '4px' }} className="dot-blink">▸</span>}
+                {msg}
+              </div>
+            ))}
+          </div>
+
+          {/* Progress bar */}
+          <div style={{ width: '100%', height: '2px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', marginTop: '14px', overflow: 'hidden' }}>
+            <div style={{
+              height: '100%',
+              width: `${(loadStep / loadMessages.length) * 100}%`,
+              background: 'linear-gradient(90deg, #00E5FF, #00FF88)',
+              transition: 'width 0.4s ease',
+              boxShadow: '0 0 8px rgba(0,229,255,0.5)',
+            }} />
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+{/* ════════════════════════════════════════════
+          VIEW 3 — DASHBOARD (full AERO-ASTRA)
+         ════════════════════════════════════════════ */}
+{
+  showDashboard && (
+    <div className="dashboard-container fade-enter" style={{ paddingTop: '96px', paddingBottom: '36px' }}>
+      <div className="main-content">
+        {/* ── LEFT SIDEBAR ── */}
+        <div className="sidebar">
+          <div className="panel">
+            <div className="panel-title">TELEMETRY STREAM</div>
+            <div style={{ background: '#000', padding: '10px', border: '1px solid #1f2833', fontSize: '11px', lineHeight: 1.7 }}>
+              <div className="text-muted" style={{ marginBottom: '5px' }}>OPSSAT‑AD Live Telemetry Sync: OK</div>
+              <div className="data-row"><span>Altitude / Velocity:</span><span className="text-cyan">540 km | 7.5 km/s</span></div>
+              <div className="data-row"><span>EPS Load:</span><span className={isAnomaly ? 'text-red dot-blink' : 'text-cyan'}>{isAnomaly ? '89% (SPIKE)' : '32%'}</span></div>
+              <div className="data-row"><span>CPU Usage:</span><span className="text-cyan">{isAnomaly ? '74%' : '14%'}</span></div>
+              <div className="data-row"><span>Comm‑Link:</span><span className="text-green">Stable</span></div>
+              <div className="data-row"><span>TCS Temp:</span><span className={isAnomaly ? 'text-red' : 'text-cyan'}>{isAnomaly ? '+4.2°C/hr' : 'Nominal'}</span></div>
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="panel-title">AGENT: SENTINEL (ANOMALY DETECT)</div>
+            <div style={{
+              padding: '8px', border: isAnomaly ? '1px solid #ff3b3b' : '1px solid #1f2833',
+              textAlign: 'center', fontWeight: 'bold', fontSize: '12px',
+            }} className={isAnomaly ? 'text-red' : 'text-green'}>
+              {isAnomaly ? '⚠ ANOMALY DETECTED' : '✓ SYSTEM NOMINAL'}
+            </div>
+            <button onClick={triggerAnomaly} style={{
+              width: '100%', padding: '8px', marginTop: '10px', background: '#1f2833',
+              color: isAnomaly ? '#ff6b6b' : '#66fcf1',
+              border: `1px solid ${isAnomaly ? '#ff3b3b' : '#45a29e'}`,
+              cursor: 'pointer', fontFamily: 'inherit', textTransform: 'uppercase', fontSize: '11px',
+            }}>
+              {isAnomaly ? 'Reset System' : 'Trigger Fault Scenario'}
             </button>
           </div>
-        </div>
-      )}
 
-      {currentView === 'splash-2' && (
-        <div className="splash-screen">
-          <div className="model-pop">
+          <div className="panel flex-1">
+            <div className="panel-title">AGENT: CHRONICLE (EVENT LOG)</div>
+            <div className="terminal-logs">
+              {logs.map((log, i) => (
+                <p key={i} style={{ margin: '3px 0' }} className={log.includes('WARN') || log.includes('⚠') ? 'text-red' : ''}>
+                  {log}
+                </p>
+              ))}
+              {scenarioPhase === 'executing' && <p className="dot-blink">&gt; Working...</p>}
+            </div>
+          </div>
+
+          <div className="panel" style={{ height: '90px' }}>
+            <div className="panel-title" style={{ marginBottom: '5px' }}>SYSTEM VITALS EKG</div>
+            <div style={{ overflow: 'hidden', background: '#050505', border: '1px solid #1f2833', height: '58px' }}>
+              <svg className={isAnomaly ? 'ekg-erratic' : 'ekg-normal'} viewBox="0 0 500 100" preserveAspectRatio="none" style={{ width: '100%', height: '100%', display: 'block' }}>
+                <polyline
+                  fill="none"
+                  stroke={isAnomaly ? '#ff3b3b' : '#52ff52'}
+                  strokeWidth="2.5"
+                  vectorEffect="non-scaling-stroke"
+                  points={isAnomaly
+                    ? "0,50 10,20 20,80 30,10 40,90 50,30 60,70 70,40 80,60 90,15 100,80 110,20 120,90 130,10 140,85 150,30 160,70 170,25 180,80 190,10 200,90 210,40 220,60 230,15 240,80 250,20 260,90 270,10 280,85 290,30 300,70 310,25 320,80 330,10 340,90 350,40 360,60 370,15 380,80 390,20 400,90 410,10 420,85 430,30 440,70 450,25 460,80 470,10 480,90 490,40 500,50"
+                    : "0,50 80,50 85,45 90,50 100,50 105,60 110,15 115,80 120,50 140,50 150,45 160,50 330,50 335,45 340,50 350,50 355,60 360,15 365,80 370,50 390,50 400,45 410,50 580,50"}
+                />
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        {/* ── CENTER ── */}
+        <div className="center-layout">
+          <div className="center-view">
+            {isAnomaly && <div className="emergency-overlay" />}
+            <div className="overlay-status">
+              <span className={`status-indicator${isAnomaly ? ' red' : ''}`} />
+              ORACLE: DIGITAL TWIN LIVE
+            </div>
             <ModelViewer
-              url="/gun_satellite_panel_computer.glb"
-              width="100vw"
-              height="100vh"
-              modelXOffset={0.2}
-              modelYOffset={-0.12}
-              autoRotate={false}
-              autoRotateSpeed={0.3}
-              enableManualZoom={false}
-              enableManualRotation={false}
-              enableHoverRotation={false}
-              enableMouseParallax={false}
-              environmentPreset="studio"
-              ambientIntensity={0.8}
-              keyLightIntensity={1}
-              defaultRotationX={0}
-              defaultRotationY={90}
-              defaultZoom={0.95}
-              minZoomDistance={0.8}
-              showScreenshotButton={false}
+              url="/simple_satellite_low_poly_free.glb"
+              width="100%"
+              height="100%"
+              autoRotate={true}
+              autoRotateSpeed={0.5}
+              enableManualRotation={true}
+              enableMouseParallax={true}
+              environmentPreset="warehouse"
+              defaultZoom={0.8}
+              defaultRotationX={20}
+              defaultRotationY={-50}
+              showScreenshotButton={true}
             />
           </div>
-          
-          <div className="splash-text-panel">
-            <p className="sub-text">INITIALIZING SATELLITE CONTROL PANEL<span className="dot-blink">...</span></p>
+
+          <div className="bottom-bar">
+            <div className="bottom-section">
+              <div className="panel-title">AGENT: QUARTERMASTER (SANDBOX)</div>
+              {(scenarioPhase === 'planning' || scenarioPhase === 'awaiting_approval' || scenarioPhase === 'executing') ? (
+                <div style={{ fontSize: '12px', marginTop: '8px', lineHeight: 1.7 }}>
+                  Simulating mitigation options...<br />
+                  <span className="text-cyan">Selected: Option {selectedMitigation}</span><br />
+                  <span className={selectedMitigation === 1 ? 'text-green' : 'text-red'}>
+                    {selectedMitigation === 1 ? 'Confidence: 98% (Safe)' : 'Risk: 15% System Loss (CRITICAL)'}
+                  </span>
+                </div>
+              ) : (
+                <div className="text-muted" style={{ fontSize: '11px', marginTop: '10px' }}>Standby for mitigation models.</div>
+              )}
+            </div>
+
+            <div className="bottom-section">
+              <div className="panel-title">AGENT: GUARDIAN (SAFETY GATE)</div>
+              <div className="slider-container">
+                <label className="switch">
+                  <input type="checkbox" disabled={scenarioPhase !== 'awaiting_approval'} checked={guardianApproved} onChange={handleApprove} />
+                  <span className="slider" />
+                </label>
+                <span style={{ fontSize: '12px', color: isAnomaly ? '#fff' : '#666' }}>Approve Primary Mitigation</span>
+              </div>
+              {guardianApproved && <div style={{ fontSize: '11px', marginTop: '8px' }} className="text-green">Safety Approval Granted.</div>}
+            </div>
+
+            <div className="bottom-section" style={{ borderRight: 'none', paddingRight: 0 }}>
+              <div className="panel-title">AGENT: SCRIBE (ORCHESTRATOR)</div>
+              <div className="text-muted" style={{ fontSize: '11px', marginBottom: '8px' }}>Execute action and generate audit runbook.</div>
+              <button className="action-btn" disabled={!guardianApproved || scenarioPhase !== 'awaiting_approval'} onClick={executeRunbook}>
+                {scenarioPhase === 'executing' ? 'EXECUTING...' : 'EXECUTE RUNBOOK'}
+              </button>
+            </div>
           </div>
         </div>
-      )}
 
-      {currentView === 'dashboard' && (
-        <div className="dashboard-container fade-enter">
-          <div className="header">
-            <div style={{ width: '80px', height: '80px', marginRight: '15px' }}>
-              <ModelViewer
-                url="/simple_satellite_low_poly_free.glb"
-                width="80px"
-                height="80px"
-                autoRotate={true}
-                autoRotateSpeed={0.5}
-                enableManualZoom={false}
-                enableManualRotation={false}
-                enableMouseParallax={false}
-                environmentPreset="warehouse"
-                defaultZoom={1.5}
-                showScreenshotButton={false}
-              />
-            </div>
-            <div style={{ color: '#66fcf1', marginRight: '15px' }}>AERO-ASTRA</div>
-            <div style={{ fontSize: '12px', color: '#888' }}>| Autonomous Event Response & Orbital Triage Architecture</div>
+        {/* ── RIGHT SIDEBAR ── */}
+        <div className="sidebar right-panel">
+          <div className="panel">
+            <div className="panel-title">AGENT: VITALS (PROACTIVE)</div>
+            <div className="data-row"><span>Subsystem Health</span><span className={isAnomaly ? 'text-red' : 'text-green'}>{isAnomaly ? 'CRITICAL' : 'OPTIMAL'}</span></div>
+            <div className="data-row"><span>EPS_SOC</span><span>{isAnomaly ? '85.2% (DEGRADING)' : '98.5%'}</span></div>
+            <div className="data-row"><span>TCS_TEMP</span><span>{isAnomaly ? '+4.2°C/hr' : 'Stable'}</span></div>
+            <div className="data-row"><span>Attitude</span><span className="text-cyan">{isAnomaly ? 'DRIFT 0.3°' : 'Nominal'}</span></div>
+            {isAnomaly && (
+              <div style={{ color: '#ff3b3b', fontSize: '11px', marginTop: '8px', border: '1px dashed #ff3b3b', padding: '6px' }}>
+                ⚠ WARNING: RUL ESTIMATE 12 ORBITS
+              </div>
+            )}
           </div>
 
-          <div className="main-content">
-            {/* Left Sidebar: Telemetry, Sentinel, Chronicle */}
-            <div className="sidebar">
-              <div className="panel">
-                <div className="panel-title">TELEMETRY STREAM</div>
-                <div style={{ background: '#000', padding: '10px', border: '1px solid #1f2833', fontSize: '11px', height: '90px' }}>
-                  <div className="text-muted">Live OPSSAT-AD Feed pending...</div>
-                  <div className="data-row" style={{ marginTop: '10px' }}><span>Altitude:</span> <span className="text-cyan">540 km</span></div>
-                  <div className="data-row"><span>Velocity:</span> <span className="text-cyan">7.5 km/s</span></div>
+          <div className="panel flex-1">
+            <div className="panel-title">AGENT: SHERLOCK (DIAGNOSIS)</div>
+            {(scenarioPhase === 'diagnosing' || scenarioPhase === 'planning' || scenarioPhase === 'awaiting_approval' || scenarioPhase === 'executing') ? (
+              <div className="causal-graph-placeholder" style={{ flexDirection: 'column', padding: '10px', alignItems: 'flex-start', justifyContent: 'center', gap: '4px' }}>
+                <div style={{ color: '#ff3b3b', fontWeight: 'bold', marginBottom: '4px' }}>ROOT CAUSE IDENTIFIED:</div>
+                <div className="text-cyan" style={{ fontSize: '12px' }}>[EPS Power Spike]</div>
+                <div style={{ margin: '2px 0', color: '#888' }}>↓ causing ↓</div>
+                <div className="text-cyan" style={{ fontSize: '12px' }}>[TCS Thermal Build-up]</div>
+              </div>
+            ) : (
+              <div className="causal-graph-placeholder text-muted">
+                {scenarioPhase === 'detected' ? <span className="dot-blink">Analyzing telemetry data...</span> : 'Awaiting fault trigger...'}
+              </div>
+            )}
+          </div>
+
+          <div className="panel">
+            <div className="panel-title">AGENT: ATHENA (MITIGATION)</div>
+            {(scenarioPhase === 'planning' || scenarioPhase === 'awaiting_approval' || scenarioPhase === 'executing') ? (
+              <div>
+                <div style={{ fontSize: '11px', marginBottom: '8px', color: '#888' }}>Recommended Recovery Options:</div>
+                <div onClick={() => scenarioPhase !== 'executing' && setSelectedMitigation(1)}
+                  style={{ border: selectedMitigation === 1 ? '1px solid #66fcf1' : '1px solid #45a29e', padding: '8px', fontSize: '11px', marginBottom: '5px', background: selectedMitigation === 1 ? 'rgba(102,252,241,0.15)' : 'rgba(69,162,158,0.08)', cursor: 'pointer' }}>
+                  1. Throttle EPS Bus A (Safe: 98%)
+                </div>
+                <div onClick={() => scenarioPhase !== 'executing' && setSelectedMitigation(2)}
+                  style={{ border: selectedMitigation === 2 ? '1px solid #66fcf1' : '1px solid #333', padding: '8px', fontSize: '11px', color: selectedMitigation === 2 ? '#fff' : '#777', background: selectedMitigation === 2 ? 'rgba(102,252,241,0.15)' : 'transparent', cursor: 'pointer' }}>
+                  2. Emergency Shutoff (Loss risk: 15%)
                 </div>
               </div>
-
-              <div className="panel">
-                <div className="panel-title">AGENT: SENTINEL (ANOMALY DETECT)</div>
-                <div style={{ padding: '8px', border: anomalyStatus ? '1px solid #ff3b3b' : '1px solid #1f2833', textAlign: 'center', fontWeight: 'bold' }} className={anomalyStatus ? 'text-red' : 'text-green'}>
-                  {anomalyStatus ? 'ANOMALY DETECTED' : 'SYSTEM NOMINAL'}
-                </div>
-                <button 
-                  onClick={toggleAnomaly}
-                  style={{
-                    width: '100%', padding: '8px', marginTop: '10px', background: '#1f2833', color: '#66fcf1',
-                    border: '1px solid #45a29e', cursor: 'pointer', fontFamily: 'inherit', textTransform: 'uppercase'
-                  }}
-                >
-                  {anomalyStatus ? 'Reset System' : 'Trigger Fault Scenario'}
-                </button>
+            ) : (
+              <div className="text-muted" style={{ fontSize: '11px' }}>
+                {scenarioPhase === 'diagnosing' ? <span className="dot-blink">Waiting for Sherlock diagnosis...</span> : 'No mitigation required.'}
               </div>
+            )}
+          </div>
 
-              <div className="panel flex-1">
-                <div className="panel-title">AGENT: CHRONICLE (EVENT LOG)</div>
-                <div className="terminal-logs">
-                  <p>&gt; System booted successfully.</p>
-                  <p>&gt; Telemetry linked on band S7.</p>
-                  {anomalyStatus ? (
-                    <>
-                      <p className="text-red">&gt; WARN: Anomaly detected at EPS Bus A.</p>
-                      <p>&gt; Gathering contextual data blocks...</p>
-                      <p>&gt; Executing SHERLOCK diagnostic pipeline.</p>
-                    </>
-                  ) : (
-                    <p>&gt; Awaiting events...</p>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Center: 3D Digital Twin & Action Bar */}
-            <div className="center-layout">
-              <div className="center-view">
-                <div className="overlay-status">
-                  <span className={`status-indicator ${anomalyStatus ? 'red' : ''}`}></span>
-                  ORACLE: DIGITAL TWIN LIVE
-                </div>
-                <ModelViewer
-                  url="/simple_satellite_low_poly_free.glb"
-                  width="100%"
-                  height="100%"
-                  autoRotate={true}
-                  autoRotateSpeed={0.5}
-                  enableManualRotation={true}
-                  enableMouseParallax={true}
-                  environmentPreset={anomalyStatus ? "sunset" : "warehouse"}
-                  defaultZoom={0.8}
-                  defaultRotationX={20}
-                  defaultRotationY={-50}
-                  showScreenshotButton={true}
-                />
-              </div>
-
-              {/* Bottom Panel (Action Sandbox, Guardian, Scribe) */}
-              <div className="bottom-bar">
-                <div className="bottom-section">
-                  <div className="panel-title">AGENT: QUARTERMASTER (SANDBOX)</div>
-                  {anomalyStatus ? (
-                    <div style={{ fontSize: '12px', marginTop: '10px' }}>
-                      Simulating Mitigation Options... <br /><br />
-                      <span className="text-cyan">Option 1 Confidence: 98% Success</span><br />
-                      <span className="text-red">Option 2 Risk: 15% System Loss</span>
-                    </div>
-                  ) : (
-                    <div className="text-muted" style={{ fontSize: '11px', marginTop: '10px' }}>Standby for mitigation models.</div>
-                  )}
-                </div>
-
-                <div className="bottom-section">
-                  <div className="panel-title">AGENT: GUARDIAN (SAFETY GATE)</div>
-                  <div className="slider-container">
-                    <label className="switch">
-                      <input type="checkbox" disabled={!anomalyStatus} checked={guardianApproved} onChange={(e) => setGuardianApproved(e.target.checked)} />
-                      <span className="slider"></span>
-                    </label>
-                    <span style={{ fontSize: '12px', color: anomalyStatus ? '#fff' : '#666' }}>Approve Primary Mitigation</span>
-                  </div>
-                  {guardianApproved && <div style={{ fontSize: '11px', marginTop: '10px' }} className="text-green">Safety Approval Granted.</div>}
-                </div>
-
-                <div className="bottom-section" style={{ borderRight: 'none', paddingRight: 0 }}>
-                  <div className="panel-title">AGENT: SCRIBE (ORCHESTRATOR)</div>
-                  <div className="text-muted" style={{ fontSize: '11px', marginBottom: '10px' }}>Execute action and generate audit trail.</div>
-                  <button className="action-btn" disabled={!guardianApproved}>
-                    EXECUTE RUNBOOK
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Right Sidebar: Vitals, Sherlock, Athena */}
-            <div className="sidebar right-panel">
-              <div className="panel">
-                <div className="panel-title">AGENT: VITALS (PROACTIVE)</div>
-                <div className="data-row">
-                  <span>Subsystem Health</span>
-                  <span className={anomalyStatus ? 'text-red' : 'text-green'}>{anomalyStatus ? 'CRITICAL' : 'OPTIMAL'}</span>
-                </div>
-                <div className="data-row">
-                  <span>EPS_SOC</span>
-                  <span>{anomalyStatus ? '85.2% (DEGRADING)' : '98.5%'}</span>
-                </div>
-                <div className="data-row">
-                  <span>TCS_TEMP</span>
-                  <span>{anomalyStatus ? '+4.2°C/hr' : 'Stable'}</span>
-                </div>
-                {anomalyStatus && (
-                  <div style={{ color: '#ff3b3b', fontSize: '12px', marginTop: '10px', border: '1px dashed #ff3b3b', padding: '5px' }}>
-                    WARNING: RUL ESTIMATE 12 ORBITS
-                  </div>
-                )}
-              </div>
-
-              <div className="panel flex-1">
-                <div className="panel-title">AGENT: SHERLOCK (DIAGNOSIS)</div>
-                {anomalyStatus ? (
-                  <div className="causal-graph-placeholder" style={{ flexDirection: 'column', padding: '10px' }}>
-                    <div style={{ color: '#ff3b3b', fontWeight: 'bold', marginBottom: '5px' }}>ROOT CAUSE IDENTIFIED:</div>
-                    <div className="text-cyan" style={{ fontSize: '12px' }}>[EPS Power Spike]</div>
-                    <div style={{ margin: '2px 0' }}>↓ causing ↓</div>
-                    <div className="text-cyan" style={{ fontSize: '12px' }}>[TCS Thermal Build-up]</div>
-                  </div>
-                ) : (
-                  <div className="causal-graph-placeholder text-muted">Awaiting fault trigger...</div>
-                )}
-              </div>
-
-              <div className="panel">
-                <div className="panel-title">AGENT: ATHENA (MITIGATION)</div>
-                {anomalyStatus ? (
-                  <div>
-                    <div style={{ fontSize: '11px', marginBottom: '8px' }}>Recommended Recovery Options:</div>
-                    <div style={{ border: '1px solid #45a29e', padding: '8px', fontSize: '11px', marginBottom: '5px', background: 'rgba(69, 162, 158, 0.1)' }}>
-                      1. Throttle down EPS Bus A (Safe: 98%)
-                    </div>
-                    <div style={{ border: '1px solid #333', padding: '8px', fontSize: '11px', color: '#777' }}>
-                      2. Emergency Shutoff (Loss risk: 15%)
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-muted" style={{ fontSize: '11px' }}>No mitigation required.</div>
-                )}
-              </div>
-            </div>
-
+          <div className="panel" style={{ gap: '10px', display: 'flex', flexDirection: 'column' }}>
+            <div className="panel-title" style={{ marginBottom: 0 }}>SYSTEM RESOURCES</div>
+            <SystemMeter label="CPU" />
+            <SystemMeter label="GPU" />
+            <SystemMeter label="NET" />
+            <SystemMeter label="SENS" />
           </div>
         </div>
-      )}
-    </>
+      </div>
+
+      {/* Footer */}
+      <div style={{
+        position: 'fixed', bottom: 0, left: 0, right: 0, height: '36px',
+        background: 'rgba(0,0,0,0.6)', borderTop: '1px solid #1f2833',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px',
+        fontSize: '9px', fontFamily: 'monospace', letterSpacing: '0.1em', color: 'rgba(255,255,255,0.4)',
+        textTransform: 'uppercase', zIndex: 40,
+      }}>
+        <span>ISRO NETRA FEED: <span style={{ color: '#00FF88' }}>● LIVE</span></span>
+        <div style={{ display: 'flex', gap: '20px' }}><SystemMeter label="CPU" /><SystemMeter label="NET" /></div>
+        <span>AERO‑ASTRA MISSION OPS v2.5 <span style={{ color: '#00E5FF' }}>✓ NOMINAL</span></span>
+      </div>
+    </div>
+  )
+}
+    </div >
   );
 }
 

@@ -1,0 +1,6 @@
+2026-08-25 11:37:36,725 [INFO] ============================================================
+2026-08-25 11:37:36,726 [INFO] SENTINEL — ROW-LEVEL EVALUATION (PHASE 1 ROLLING FEATURES)
+2026-08-25 11:37:36,726 [INFO] ============================================================
+2026-08-25 11:37:36,970 [INFO] Extracting rolling row-level features (window_size=20)...
+2026-08-25 11:37:37,419 [INFO] Row counts -> Pure Train: 177230, Val: 47948, Test: 78315
+2026-08-25 11:37:37,434 [INFO] Training on pure_train split using true_contamination=0.3157.

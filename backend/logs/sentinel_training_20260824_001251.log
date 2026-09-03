@@ -1,0 +1,125 @@
+2026-08-24 00:12:51,165 [INFO] ============================================================
+2026-08-24 00:12:51,165 [INFO] SENTINEL — Satellite Anomaly Detection Training
+2026-08-24 00:12:51,165 [INFO] AERO-ASTRA | Agent 1
+2026-08-24 00:12:51,165 [INFO] Started: 2026-08-24T00:12:51.165960
+2026-08-24 00:12:51,165 [INFO] ============================================================
+2026-08-24 00:12:51,166 [INFO] Loading feature dataset: /Users/meetshah1004/Desktop/Meet/Banglore_Space/Aero_Astra/data/raw/opssat/dataset.csv
+2026-08-24 00:12:51,178 [INFO]   Shape: (2123, 23)
+2026-08-24 00:12:51,178 [INFO]   Columns (first 10): ['segment', 'anomaly', 'train', 'channel', 'sampling', 'duration', 'len', 'mean', 'var', 'std']
+2026-08-24 00:12:51,180 [INFO]   Label distribution:
+    Normal:  1689
+    Anomaly: 434
+2026-08-24 00:12:51,180 [INFO] Loading raw segments: /Users/meetshah1004/Desktop/Meet/Banglore_Space/Aero_Astra/data/raw/opssat/segments.csv
+2026-08-24 00:12:51,183 [INFO]   Shape (first 5000 rows): (5000, 8)
+2026-08-24 00:12:51,183 [INFO] ------------------------------------------------------------
+2026-08-24 00:12:51,183 [INFO] PREPROCESSING
+2026-08-24 00:12:51,183 [INFO] ------------------------------------------------------------
+2026-08-24 00:12:51,183 [INFO] Feature columns (18): ['duration', 'len', 'mean', 'var', 'std', 'kurtosis', 'skew', 'n_peaks', 'smooth10_n_peaks', 'smooth20_n_peaks', 'diff_peaks', 'diff2_peaks', 'diff_var', 'diff2_var', 'gaps_squared', 'len_weighted', 'var_div_duration', 'var_div_len']
+2026-08-24 00:12:51,186 [INFO] RobustScaler applied
+2026-08-24 00:12:51,186 [INFO]   X shape: (2123, 18)
+2026-08-24 00:12:51,186 [INFO]   y shape: (2123,) | Anomaly rate: 20.4%
+2026-08-24 00:12:51,329 [INFO] Preprocessed saved -> /Users/meetshah1004/Desktop/Meet/Banglore_Space/Aero_Astra/data/processed/opssat_preprocessed.parquet
+2026-08-24 00:12:51,329 [INFO] ------------------------------------------------------------
+2026-08-24 00:12:51,329 [INFO] TRAIN/TEST SPLIT (using provided 'train' column)
+2026-08-24 00:12:51,329 [INFO] ------------------------------------------------------------
+2026-08-24 00:12:51,329 [INFO]   Train: 1594 rows | Anomalies: 321
+2026-08-24 00:12:51,329 [INFO]   Test:  529 rows | Anomalies: 113
+2026-08-24 00:12:51,329 [INFO] 
+Training on NORMAL samples only: 1273 rows
+2026-08-24 00:12:51,329 [INFO] (These detectors learn normal distributions, then flag deviations as anomalies)
+2026-08-24 00:12:51,329 [INFO] ------------------------------------------------------------
+2026-08-24 00:12:51,329 [INFO] TRAINING: Isolation Forest
+2026-08-24 00:12:51,329 [INFO] ------------------------------------------------------------
+2026-08-24 00:12:51,329 [INFO]   n_estimators=200, contamination=0.20, max_features=1.0
+2026-08-24 00:12:51,436 [INFO]   [OK] Isolation Forest trained
+2026-08-24 00:12:51,459 [INFO]   Saved -> /Users/meetshah1004/Desktop/Meet/Banglore_Space/Aero_Astra/models/sentinel_if.joblib
+2026-08-24 00:12:51,459 [INFO] ------------------------------------------------------------
+2026-08-24 00:12:51,459 [INFO] TRAINING: One-Class SVM
+2026-08-24 00:12:51,459 [INFO] ------------------------------------------------------------
+2026-08-24 00:12:51,459 [INFO]   kernel=rbf, nu=0.20, gamma=scale
+2026-08-24 00:12:51,470 [INFO]   [OK] One-Class SVM trained
+2026-08-24 00:12:51,471 [INFO]   Saved -> /Users/meetshah1004/Desktop/Meet/Banglore_Space/Aero_Astra/models/sentinel_ocsvm.joblib
+2026-08-24 00:12:51,480 [INFO] 
+============================================================
+2026-08-24 00:12:51,480 [INFO] EVALUATION: Isolation Forest
+2026-08-24 00:12:51,480 [INFO] ============================================================
+2026-08-24 00:12:51,482 [INFO]   Precision : 0.3944
+2026-08-24 00:12:51,482 [INFO]   Recall    : 0.4956
+2026-08-24 00:12:51,482 [INFO]   F1 Score  : 0.4392
+2026-08-24 00:12:51,483 [INFO] 
+Confusion Matrix:
+[[330  86]
+ [ 57  56]]
+2026-08-24 00:12:51,484 [INFO] 
+Classification Report:
+              precision    recall  f1-score   support
+
+      Normal       0.85      0.79      0.82       416
+     Anomaly       0.39      0.50      0.44       113
+
+    accuracy                           0.73       529
+   macro avg       0.62      0.64      0.63       529
+weighted avg       0.75      0.73      0.74       529
+
+2026-08-24 00:12:51,484 [INFO] 
+============================================================
+2026-08-24 00:12:51,484 [INFO] EVALUATION: One-Class SVM
+2026-08-24 00:12:51,484 [INFO] ============================================================
+2026-08-24 00:12:51,485 [INFO]   Precision : 0.4161
+2026-08-24 00:12:51,485 [INFO]   Recall    : 0.5044
+2026-08-24 00:12:51,485 [INFO]   F1 Score  : 0.4560
+2026-08-24 00:12:51,486 [INFO] 
+Confusion Matrix:
+[[336  80]
+ [ 56  57]]
+2026-08-24 00:12:51,487 [INFO] 
+Classification Report:
+              precision    recall  f1-score   support
+
+      Normal       0.86      0.81      0.83       416
+     Anomaly       0.42      0.50      0.46       113
+
+    accuracy                           0.74       529
+   macro avg       0.64      0.66      0.64       529
+weighted avg       0.76      0.74      0.75       529
+
+2026-08-24 00:12:51,487 [INFO] 
+--- Building SENTINEL Ensemble ---
+2026-08-24 00:12:51,527 [INFO]   Threshold tuned: 0.33 -> Val F1 = 0.4292
+2026-08-24 00:12:51,544 [INFO] 
+============================================================
+2026-08-24 00:12:51,544 [INFO] EVALUATION: SENTINEL Ensemble (FINAL)
+2026-08-24 00:12:51,544 [INFO] ============================================================
+2026-08-24 00:12:51,545 [INFO]   Precision : 0.4579
+2026-08-24 00:12:51,545 [INFO]   Recall    : 0.4336
+2026-08-24 00:12:51,545 [INFO]   F1 Score  : 0.4455
+2026-08-24 00:12:51,547 [INFO]   ROC-AUC   : 0.7250
+2026-08-24 00:12:51,547 [INFO] 
+Confusion Matrix:
+[[358  58]
+ [ 64  49]]
+2026-08-24 00:12:51,548 [INFO] 
+Classification Report:
+              precision    recall  f1-score   support
+
+      Normal       0.85      0.86      0.85       416
+     Anomaly       0.46      0.43      0.45       113
+
+    accuracy                           0.77       529
+   macro avg       0.65      0.65      0.65       529
+weighted avg       0.76      0.77      0.77       529
+
+2026-08-24 00:12:51,549 [INFO] 
+Saved: /Users/meetshah1004/Desktop/Meet/Banglore_Space/Aero_Astra/models/sentinel_ensemble.json
+2026-08-24 00:12:51,549 [INFO] Saved: /Users/meetshah1004/Desktop/Meet/Banglore_Space/Aero_Astra/models/sentinel_scaler.joblib
+2026-08-24 00:12:51,549 [INFO] 
+============================================================
+2026-08-24 00:12:51,549 [INFO] SENTINEL TRAINING COMPLETE
+2026-08-24 00:12:51,549 [INFO] ============================================================
+2026-08-24 00:12:51,549 [INFO]   Isolation Forest F1 : 0.4392
+2026-08-24 00:12:51,549 [INFO]   One-Class SVM F1    : 0.4560
+2026-08-24 00:12:51,549 [INFO]   SENTINEL Ensemble   : 0.4455  <-- FINAL
+2026-08-24 00:12:51,549 [INFO]   Paper Benchmark     : 0.78 (ensemble)
+2026-08-24 00:12:51,549 [INFO] 
+  Log file: /Users/meetshah1004/Desktop/Meet/Banglore_Space/Aero_Astra/logs/sentinel_training_20260824_001251.log
+2026-08-24 00:12:51,549 [INFO] ============================================================

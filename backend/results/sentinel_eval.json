@@ -1,0 +1,62 @@
+{
+    "production_model": "XGBoost (Supervised, Combined Features)",
+    "features": [
+        "flatline_duration",
+        "log_inv_std"
+    ],
+    "row_level_cv": {
+        "threshold": 0.5432702980258248,
+        "precision": 0.5026571108185851,
+        "recall": 0.5769526714139818,
+        "f1": 0.5372484904541991,
+        "roc_auc": 0.7118414218298503,
+        "pr_auc": 0.5394449539617056,
+        "confusion_matrix": [
+            [
+                112895,
+                40804
+            ],
+            [
+                30239,
+                41240
+            ]
+        ]
+    },
+    "row_level_test": {
+        "threshold": 0.5432702980258248,
+        "precision": 0.6249513681753339,
+        "recall": 0.6696543338544381,
+        "f1": 0.6465310503278606,
+        "roc_auc": 0.7849326886209613,
+        "pr_auc": 0.6926690514553369,
+        "confusion_matrix": [
+            [
+                37962,
+                11568
+            ],
+            [
+                9509,
+                19276
+            ]
+        ]
+    },
+    "segment_level_test": {
+        "threshold": 0.5432702980258248,
+        "precision": 0.3875598086124402,
+        "recall": 0.7168141592920354,
+        "f1": 0.5031055900621118,
+        "roc_auc": 0.8072774846834581,
+        "pr_auc": 0.6829083500813465,
+        "confusion_matrix": [
+            [
+                288,
+                128
+            ],
+            [
+                32,
+                81
+            ]
+        ]
+    },
+    "isolation_forest_baseline": null
+}

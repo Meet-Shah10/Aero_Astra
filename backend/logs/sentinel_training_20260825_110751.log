@@ -1,0 +1,38 @@
+2026-08-25 11:07:51,708 [INFO] ============================================================
+2026-08-25 11:07:51,708 [INFO] SENTINEL — ROW-LEVEL EVALUATION (ISOLATION FOREST)
+2026-08-25 11:07:51,708 [INFO] ============================================================
+2026-08-25 11:07:51,708 [INFO] Loading feature dataset: /Users/meetshah1004/Desktop/Meet/Banglore_Space/Aero_Astra/backend/data/raw/opssat/dataset.csv
+2026-08-25 11:07:51,719 [INFO] Loading raw segments: /Users/meetshah1004/Desktop/Meet/Banglore_Space/Aero_Astra/backend/data/raw/opssat/segments.csv
+2026-08-25 11:07:51,953 [INFO] Training on FULL pure_train split (normal + anomalies mixed, unsupervised) using true_contamination=0.1991.
+2026-08-25 11:07:52,101 [INFO] Broadcasting IF & OCSVM segment anomaly scores to row level...
+2026-08-25 11:07:52,158 [INFO] Row-Level Test Set Size: 78315
+2026-08-25 11:07:52,158 [INFO] Fitting normalization bounds strictly on Train + Val splits...
+2026-08-25 11:07:52,165 [INFO] 
+============================================================
+EVALUATION: One-Class SVM (Baseline Row-Level)
+============================================================
+2026-08-25 11:07:52,174 [INFO]   Precision : 0.4714
+  Recall    : 0.3837
+  F1 Score  : 0.4231
+2026-08-25 11:07:52,175 [INFO] 
+Confusion Matrix:
+[[37145 12385]
+ [17739 11046]]
+2026-08-25 11:07:52,345 [INFO]   Tuned IF Threshold on Val: 0.02 (Val F1: 0.5054)
+2026-08-25 11:07:52,345 [INFO] 
+============================================================
+EVALUATION: Isolation Forest (PRODUCTION Model Row-Level)
+============================================================
+2026-08-25 11:07:52,354 [INFO]   Precision : 0.3795
+  Recall    : 1.0000
+  F1 Score  : 0.5502
+2026-08-25 11:07:52,358 [INFO]   ROC-AUC   : 0.5661
+2026-08-25 11:07:52,359 [INFO] 
+Confusion Matrix:
+[[ 2473 47057]
+ [    0 28785]]
+2026-08-25 11:07:52,360 [INFO] 
+============================================================
+SENTINEL REVISION COMPLETE
+============================================================
+2026-08-25 11:07:52,360 [INFO]   IF (Production) F1 : 0.5502

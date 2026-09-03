@@ -1,0 +1,41 @@
+2026-08-25 11:42:15,335 [INFO] ============================================================
+2026-08-25 11:42:15,335 [INFO] SENTINEL — ROW-LEVEL EVALUATION (PHASE 1 ROLLING FEATURES)
+2026-08-25 11:42:15,335 [INFO] ============================================================
+2026-08-25 11:42:15,568 [INFO] Extracting rolling row-level features (window_size=20)...
+2026-08-25 11:42:16,026 [INFO] Row counts -> Pure Train: 177230, Val: 47948, Test: 78315
+2026-08-25 11:42:16,044 [INFO] Training on pure_train split using true_contamination=0.3157.
+2026-08-25 11:42:17,353 [INFO] Directly scoring all rows...
+2026-08-25 11:42:44,021 [INFO] Fitting normalization bounds strictly on Train + Val splits...
+2026-08-25 11:42:44,028 [INFO] Diagnostic: Unique if_norm scores in Test Set: 38219 out of 78315 rows
+2026-08-25 11:42:44,028 [INFO] 
+============================================================
+EVALUATION: One-Class SVM (Phase 1 Baseline)
+============================================================
+2026-08-25 11:42:44,037 [INFO]   Precision : 0.1991
+  Recall    : 0.1608
+  F1 Score  : 0.1779
+2026-08-25 11:42:44,050 [INFO]   ROC-AUC   : 0.3823
+2026-08-25 11:42:44,050 [INFO]   PR-AUC    : 0.2866
+2026-08-25 11:42:44,249 [INFO] 
+Confusion Matrix:
+[[30908 18622]
+ [24156  4629]]
+2026-08-25 11:42:44,616 [WARNING] Could not find any threshold with precision >= 0.50 that yields F1 > 0. Falling back to simple F1 maximization.
+2026-08-25 11:42:44,787 [INFO]   Tuned IF Threshold on Val: 0.01 (Val F1: 0.3885, Val Prec: 0.0000)
+2026-08-25 11:42:44,787 [INFO] 
+============================================================
+EVALUATION: Isolation Forest (Phase 1 Rolling)
+============================================================
+2026-08-25 11:42:44,796 [INFO]   Precision : 0.3284
+  Recall    : 0.5526
+  F1 Score  : 0.4120
+2026-08-25 11:42:44,807 [INFO]   ROC-AUC   : 0.3893
+2026-08-25 11:42:44,808 [INFO]   PR-AUC    : 0.2876
+2026-08-25 11:42:44,856 [INFO] 
+Confusion Matrix:
+[[17004 32526]
+ [12879 15906]]
+2026-08-25 11:42:44,856 [INFO] 
+============================================================
+PHASE 1 COMPLETE
+============================================================

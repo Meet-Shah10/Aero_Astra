@@ -1,0 +1,42 @@
+{
+    "model": "Isolation Forest (Flatline Duration)",
+    "features": [
+        "flatline_duration"
+    ],
+    "row_level_test": {
+        "threshold": 0.004698016221990967,
+        "precision": 0.6116210800987838,
+        "recall": 0.45600138961264547,
+        "f1": 0.5224694503045019,
+        "roc_auc": 0.7270257642615293,
+        "pr_auc": 0.6179174675595538,
+        "confusion_matrix": [
+            [
+                41195,
+                8335
+            ],
+            [
+                15659,
+                13126
+            ]
+        ]
+    },
+    "segment_level_test": {
+        "threshold": 0.004698016221990967,
+        "precision": 0.21361058601134217,
+        "recall": 1.0,
+        "f1": 0.35202492211838005,
+        "roc_auc": 0.6594941286589517,
+        "pr_auc": 0.42347390938817303,
+        "confusion_matrix": [
+            [
+                0,
+                416
+            ],
+            [
+                0,
+                113
+            ]
+        ]
+    }
+}

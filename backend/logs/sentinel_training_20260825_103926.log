@@ -1,0 +1,118 @@
+2026-08-25 10:39:26,710 [INFO] ============================================================
+2026-08-25 10:39:26,710 [INFO] SENTINEL — ROW-LEVEL EVALUATION & LSTM REVISION
+2026-08-25 10:39:26,710 [INFO] ============================================================
+2026-08-25 10:39:26,710 [INFO] Loading feature dataset: /Users/meetshah1004/Desktop/Meet/Banglore_Space/Aero_Astra/backend/data/raw/opssat/dataset.csv
+2026-08-25 10:39:26,722 [INFO] Loading raw segments: /Users/meetshah1004/Desktop/Meet/Banglore_Space/Aero_Astra/backend/data/raw/opssat/segments.csv
+2026-08-25 10:39:27,088 [INFO] Broadcasting IF & OCSVM segment scores to row level...
+2026-08-25 10:39:27,115 [INFO] Preparing LSTM dataset (Padded Row-Level Windows)...
+2026-08-25 10:39:27,120 [INFO] Building Train Loader...
+2026-08-25 10:39:27,344 [INFO] Building Validation Loader...
+2026-08-25 10:39:27,410 [INFO] ------------------------------------------------------------
+2026-08-25 10:39:27,411 [INFO] TRAINING: LSTM Forecaster (With Early Stopping)
+2026-08-25 10:39:27,411 [INFO] ------------------------------------------------------------
+2026-08-25 10:39:32,599 [INFO]   Epoch 01/50 | Train Loss: 0.003324 | Val Loss: 0.000808 (*)
+2026-08-25 10:39:35,063 [INFO]   Epoch 02/50 | Train Loss: 0.000775 | Val Loss: 0.000568 (*)
+2026-08-25 10:39:38,317 [INFO]   Epoch 03/50 | Train Loss: 0.000928 | Val Loss: 0.000607 
+2026-08-25 10:39:41,445 [INFO]   Epoch 04/50 | Train Loss: 0.000675 | Val Loss: 0.000416 (*)
+2026-08-25 10:39:44,612 [INFO]   Epoch 05/50 | Train Loss: 0.000510 | Val Loss: 0.000415 (*)
+2026-08-25 10:39:47,961 [INFO]   Epoch 06/50 | Train Loss: 0.000400 | Val Loss: 0.000348 (*)
+2026-08-25 10:39:51,051 [INFO]   Epoch 07/50 | Train Loss: 0.000336 | Val Loss: 0.000393 
+2026-08-25 10:39:54,164 [INFO]   Epoch 08/50 | Train Loss: 0.000311 | Val Loss: 0.000247 (*)
+2026-08-25 10:39:57,251 [INFO]   Epoch 09/50 | Train Loss: 0.000272 | Val Loss: 0.000232 (*)
+2026-08-25 10:39:59,813 [INFO]   Epoch 10/50 | Train Loss: 0.000243 | Val Loss: 0.000234 
+2026-08-25 10:40:02,531 [INFO]   Epoch 11/50 | Train Loss: 0.000232 | Val Loss: 0.000297 
+2026-08-25 10:40:04,930 [INFO]   Epoch 12/50 | Train Loss: 0.000215 | Val Loss: 0.000206 (*)
+2026-08-25 10:40:07,730 [INFO]   Epoch 13/50 | Train Loss: 0.000197 | Val Loss: 0.000242 
+2026-08-25 10:40:10,171 [INFO]   Epoch 14/50 | Train Loss: 0.000190 | Val Loss: 0.000205 (*)
+2026-08-25 10:40:12,818 [INFO]   Epoch 15/50 | Train Loss: 0.000180 | Val Loss: 0.000191 (*)
+2026-08-25 10:40:15,982 [INFO]   Epoch 16/50 | Train Loss: 0.000173 | Val Loss: 0.000196 
+2026-08-25 10:40:19,336 [INFO]   Epoch 17/50 | Train Loss: 0.000170 | Val Loss: 0.000190 (*)
+2026-08-25 10:40:22,259 [INFO]   Epoch 18/50 | Train Loss: 0.000170 | Val Loss: 0.000185 (*)
+2026-08-25 10:40:25,275 [INFO]   Epoch 19/50 | Train Loss: 0.000156 | Val Loss: 0.000193 
+2026-08-25 10:40:28,981 [INFO]   Epoch 20/50 | Train Loss: 0.000160 | Val Loss: 0.000182 (*)
+2026-08-25 10:40:31,663 [INFO]   Epoch 21/50 | Train Loss: 0.000151 | Val Loss: 0.000181 (*)
+2026-08-25 10:40:34,482 [INFO]   Epoch 22/50 | Train Loss: 0.000149 | Val Loss: 0.000176 (*)
+2026-08-25 10:40:37,303 [INFO]   Epoch 23/50 | Train Loss: 0.000147 | Val Loss: 0.000166 (*)
+2026-08-25 10:40:40,206 [INFO]   Epoch 24/50 | Train Loss: 0.000140 | Val Loss: 0.000169 
+2026-08-25 10:40:42,671 [INFO]   Epoch 25/50 | Train Loss: 0.000141 | Val Loss: 0.000177 
+2026-08-25 10:40:45,700 [INFO]   Epoch 26/50 | Train Loss: 0.000134 | Val Loss: 0.000165 (*)
+2026-08-25 10:40:48,664 [INFO]   Epoch 27/50 | Train Loss: 0.000134 | Val Loss: 0.000158 (*)
+2026-08-25 10:40:52,253 [INFO]   Epoch 28/50 | Train Loss: 0.000128 | Val Loss: 0.000167 
+2026-08-25 10:40:55,050 [INFO]   Epoch 29/50 | Train Loss: 0.000127 | Val Loss: 0.000162 
+2026-08-25 10:40:58,038 [INFO]   Epoch 30/50 | Train Loss: 0.000126 | Val Loss: 0.000220 
+2026-08-25 10:41:00,863 [INFO]   Epoch 31/50 | Train Loss: 0.000123 | Val Loss: 0.000167 
+2026-08-25 10:41:03,639 [INFO]   Epoch 32/50 | Train Loss: 0.000119 | Val Loss: 0.000156 (*)
+2026-08-25 10:41:06,338 [INFO]   Epoch 33/50 | Train Loss: 0.000118 | Val Loss: 0.000149 (*)
+2026-08-25 10:41:09,807 [INFO]   Epoch 34/50 | Train Loss: 0.000115 | Val Loss: 0.000144 (*)
+2026-08-25 10:41:12,121 [INFO]   Epoch 35/50 | Train Loss: 0.000115 | Val Loss: 0.000144 (*)
+2026-08-25 10:41:15,001 [INFO]   Epoch 36/50 | Train Loss: 0.000115 | Val Loss: 0.000151 
+2026-08-25 10:41:17,376 [INFO]   Epoch 37/50 | Train Loss: 0.000113 | Val Loss: 0.000166 
+2026-08-25 10:41:19,940 [INFO]   Epoch 38/50 | Train Loss: 0.000108 | Val Loss: 0.000145 
+2026-08-25 10:41:22,054 [INFO]   Epoch 39/50 | Train Loss: 0.000111 | Val Loss: 0.000149 
+2026-08-25 10:41:24,729 [INFO]   Epoch 40/50 | Train Loss: 0.000108 | Val Loss: 0.000141 (*)
+2026-08-25 10:41:27,707 [INFO]   Epoch 41/50 | Train Loss: 0.000108 | Val Loss: 0.000137 (*)
+2026-08-25 10:41:30,739 [INFO]   Epoch 42/50 | Train Loss: 0.000106 | Val Loss: 0.000135 (*)
+2026-08-25 10:41:32,988 [INFO]   Epoch 43/50 | Train Loss: 0.000100 | Val Loss: 0.000134 (*)
+2026-08-25 10:41:35,615 [INFO]   Epoch 44/50 | Train Loss: 0.000103 | Val Loss: 0.000135 
+2026-08-25 10:41:37,647 [INFO]   Epoch 45/50 | Train Loss: 0.000101 | Val Loss: 0.000131 (*)
+2026-08-25 10:41:39,732 [INFO]   Epoch 46/50 | Train Loss: 0.000101 | Val Loss: 0.000123 (*)
+2026-08-25 10:41:42,284 [INFO]   Epoch 47/50 | Train Loss: 0.000099 | Val Loss: 0.000125 
+2026-08-25 10:41:44,431 [INFO]   Epoch 48/50 | Train Loss: 0.000096 | Val Loss: 0.000127 
+2026-08-25 10:41:46,647 [INFO]   Epoch 49/50 | Train Loss: 0.000093 | Val Loss: 0.000164 
+2026-08-25 10:41:48,929 [INFO]   Epoch 50/50 | Train Loss: 0.000097 | Val Loss: 0.000121 (*)
+2026-08-25 10:41:48,959 [INFO] Scoring all rows with LSTM & Nonparametric Dynamic Thresholding...
+2026-08-25 10:41:59,042 [INFO] Saved diagnostic plot to /Users/meetshah1004/Desktop/Meet/Banglore_Space/Aero_Astra/backend/results/lstm_error_distributions.png
+2026-08-25 10:41:59,050 [INFO] Row-Level Test Set Size: 78315
+2026-08-25 10:41:59,050 [INFO] 
+--- Building Row-Level Weighted Ensemble ---
+2026-08-25 10:41:59,938 [INFO]   Grid Search Best: w_if=1.00, w_lstm=0.00, threshold=0.31 -> Val F1=0.5538
+2026-08-25 10:41:59,938 [INFO] 
+============================================================
+EVALUATION: One-Class SVM (Baseline Row-Level)
+============================================================
+2026-08-25 10:41:59,947 [INFO]   Precision : 0.6038
+  Recall    : 0.5697
+  F1 Score  : 0.5863
+2026-08-25 10:41:59,949 [INFO] 
+Confusion Matrix:
+[[38769 10761]
+ [12385 16400]]
+2026-08-25 10:41:59,949 [INFO] 
+============================================================
+EVALUATION: Isolation Forest (Row-Level)
+============================================================
+2026-08-25 10:41:59,957 [INFO]   Precision : 0.5912
+  Recall    : 0.3464
+  F1 Score  : 0.4368
+2026-08-25 10:41:59,958 [INFO] 
+Confusion Matrix:
+[[42637  6893]
+ [18815  9970]]
+2026-08-25 10:42:00,125 [INFO] 
+============================================================
+EVALUATION: LSTM Forecaster (Row-Level, tuned thresh)
+============================================================
+2026-08-25 10:42:00,134 [INFO]   Precision : 0.3655
+  Recall    : 0.9678
+  F1 Score  : 0.5306
+2026-08-25 10:42:00,135 [INFO] 
+Confusion Matrix:
+[[ 1166 48364]
+ [  927 27858]]
+2026-08-25 10:42:00,135 [INFO] 
+============================================================
+EVALUATION: SENTINEL Ensemble (FINAL Row-Level)
+============================================================
+2026-08-25 10:42:00,145 [INFO]   Precision : 0.4853
+  Recall    : 0.6705
+  F1 Score  : 0.5630
+2026-08-25 10:42:00,150 [INFO]   ROC-AUC   : 0.6831
+2026-08-25 10:42:00,151 [INFO] 
+Confusion Matrix:
+[[29057 20473]
+ [ 9484 19301]]
+2026-08-25 10:42:00,151 [INFO] 
+============================================================
+SENTINEL REVISION COMPLETE
+============================================================
+2026-08-25 10:42:00,151 [INFO]   Final Ensemble F1: 0.5630
