@@ -1,0 +1,36 @@
+# AERO-ASTRA backend — pinned to major versions verified working during the
+# 2026-09-03 audit. No requirements file existed before this; install order
+# matters less than making sure everyone's laptop has the same set.
+
+# Core / simulator
+numpy
+pandas
+pydantic>=2
+
+# SENTINEL (ML)
+scikit-learn
+xgboost
+torch
+joblib
+tqdm
+
+# SHERLOCK / ATHENA (LLM agents)
+openai
+
+# SHERLOCK graph
+networkx
+
+# Explainability (SHAP plots referenced in backend/results)
+shap
+matplotlib
+
+# Phase 1 bridge (backend/api.py) — not yet built, needed once it is
+fastapi
+uvicorn[standard]
+websockets
+
+# SCRIBE runbook templating — not yet built, needed once it is
+jinja2
+
+# Tests
+pytest

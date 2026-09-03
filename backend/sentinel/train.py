@@ -27,7 +27,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # Paths
-ROOT = Path("/Users/meetshah1004/Desktop/Meet/Banglore_Space/Aero_Astra/backend")
+ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data" / "raw" / "opssat"
 MODELS_DIR = ROOT / "models"
 RESULTS_DIR = ROOT / "results"

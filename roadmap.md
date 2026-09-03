@@ -1,81 +1,120 @@
-# AERO-ASTRA — 48-Hour Hackathon Execution Roadmap
+# AERO-ASTRA — Roadmap (40-Hour Window, Frontend-Led)
 
-> **Read work.md first.** This roadmap is the time-boxed execution layer on top of it.
-> Backend is at `/backend/`. Frontend at `/src/`. Dev server: `npm run dev` in root.
+> **Ownership split, effective now:** Mohit → 100% frontend (`src/`). Backend (`backend/`) is handed off completely — whoever picks it up should read [`backend.md`](backend.md) instead of this file. This file is the frontend-facing plan and the shared contract both sides build against.
+>
+> **The old framing was "48 hours, build 8 agents."** The new framing: **we have 40 hours, and the thing that actually needs to exist is 2-3 real, working, click-to-trigger demo flows.** Everything else is upside, not requirement. Read the MVP section first — it is the only thing that must exist for this to be a working product. Everything after it is "yes, do this too, we have time" — not a cut list.
 
 ---
 
-## What We Have Right Now (Do Not Break These)
+## The MVP: 3 buttons, real data, two branching outcomes
+
+This is the whole demo. Get this rock-solid before touching anything else.
+
+**Three scenario cards, each a real click that triggers a real backend pipeline run:**
+
+| Card | Fault | Why this one | What it proves |
+|---|---|---|---|
+| 🌡️ **Thermal Runaway** | `tcs_thermal_runaway` | Verified: panel_temp climbs 38°C→76°C in ~40 min at default settings — cleanest, most dramatic real signal we have | The FDIR/Safe-Mode story (see below) — this is *literally* the "sudden temperature spike" scenario judges ask about |
+| 📡 **Signal Dropout** | `ttc_signal_dropout` | Verified: signal_strength crashes to -114.7 dBm (past mission-loss line) within the demo window | Comms-loss cascade, fast onset (30s ramp) |
+| 🚀 **Thruster Fault** | `propulsion_thruster_fault` | Verified: thruster_temp redlines to 200°C, fastest onset (15s ramp) of any fault | Mechanical/propulsion failure mode, visually distinct from the other two |
+
+**Why only these 3, not all 6 in `faults.py`:** verified by direct testing (see [`audit_findings.md`](audit_findings.md) §3) that `eps_battery_degradation`, `adcs_reaction_wheel_degradation`, and `eps_cascade_power_failure` don't move their telemetry far enough within a demo-length window (severity 0.7, ~1hr) for *any* detector — real ESA-trained model or physics-threshold engine — to fire cleanly. Rather than gamble on a fault that might not visibly trigger live in front of judges, we lead with the 3 that are proven to work every time. (The other 3 aren't gone — see "Later, once the MVP is solid" below. They just need their `faults.py` magnitudes re-tuned first, which is a backend task, not a frontend blocker.)
+
+### The severity slider is what creates the second demo path
+
+Each scenario card keeps its severity slider (already speced below under "Scenario Picker UI"). The slider isn't just cosmetic — **it's what decides which of the two GUARDIAN outcomes plays out**, and showing both is the actual differentiator:
+
+**Path A — "Easy" / low severity → `AUTOMATED_GUARDED`**
+SHERLOCK's `urgency` comes back LOW/MEDIUM. GUARDIAN auto-executes the recovery action with zero human click, logs it, done. This is the fast, boring, "the system just handles it" path. **Build this first** — it's the simplest to wire (no UI interaction state, no approval modal), and it's the one that proves the pipeline is real end-to-end fastest. This is your quick early win.
+
+**Path B — "High-risk" / high severity → `MANUAL_INTERLOCK`**
+SHERLOCK's `urgency` comes back HIGH/CRITICAL. GUARDIAN does **not** auto-execute — it surfaces an approval modal and waits for a human click. This is the dramatic, judge-facing moment: *"For high-risk situations, nothing executes without a human. Watch — I have to click approve."* Build this second, once Path A is proven, since it's the same pipeline plus one extra UI state (waiting-for-approval) and one extra backend gate.
+
+**Bonus third tier, if time allows — `AUTONOMOUS_SAFED` (the FDIR answer):**
+If `time_to_critical_estimate_minutes` (already a real field SHERLOCK outputs, see `backend/sherlock/schemas.py:166`) drops below a threshold, GUARDIAN doesn't wait for either of the above — it fires the cheapest safe action (`shed_nonessential_load`) immediately, notifies the operator, and queues the full review for after. This is real spacecraft doctrine (FDIR / Safe Mode — the standard NASA/ESA answer to "what if something goes wrong *right now*"), it directly answers the temperature-spike question, and it reuses data + an action you already have. It's a genuinely small addition once Path A and B exist — a third `if` branch in GUARDIAN's decision function, not a new system. Do it if there's time; the demo works with just A and B.
+
+```python
+# backend/guardian.py — the whole decision, once ORACLE/SHERLOCK exist
+SAFE_MODE_THRESHOLD_MIN = 5
+
+def guardian_decide(diagnosis, oracle_response):
+    if diagnosis.time_to_critical_estimate_minutes < SAFE_MODE_THRESHOLD_MIN:
+        return {"tier": "AUTONOMOUS_SAFED", "auto_executes": True,
+                "requires_human_approval": False, "action": "shed_nonessential_load"}
+    if diagnosis.urgency in ("HIGH", "CRITICAL"):
+        return {"tier": "MANUAL_INTERLOCK", "auto_executes": False,
+                "requires_human_approval": True, "action": oracle_response.best_action}
+    return {"tier": "AUTOMATED_GUARDED", "auto_executes": True,
+            "requires_human_approval": False, "action": oracle_response.best_action}
+```
+
+### "Real" beats "impressive" — say this to yourself when a number looks boring
+
+If a telemetry value on screen reads `1.24, 1.24, 1.24, 1.24` for ten ticks in a row because that's genuinely what the physics simulator is outputting right now — **that is a win, not a bug.** It means the number came from a real WebSocket message, not a fake timer. Do not "fix" real-but-boring data by adding jitter or fallback animations. The entire point of Phase 1 (the bridge) is replacing fake numbers with real ones; a real number that happens to be flat is still real. Judges (and you) can tell the difference between "this is animating because it's scripted" and "this is animating because it's physics" — but only if you don't fake the second one to look more like the first.
+
+---
+
+## What We Have Right Now
 
 | Component | Location | Status | Notes |
 |---|---|---|---|
-| **3D Landing + Dashboard UI** | `src/App.jsx` | ✅ Working | Three.js globe, camera dolly, satellite GLB, full agent panels |
-| **SENTINEL** (XGBoost trained) | `backend/models/sentinel_production.pkl` | ✅ Trained | Real ESA OPSSAT-AD data. F1 and PR-AUC computed. Do not retrain. |
-| **SHERLOCK** (LLM + graph) | `backend/sherlock/agent.py` | ✅ Built | Claude via OpenRouter, graph-constrained, 3-retry validation loop |
-| **Physics Simulator** | `backend/simulator/engine.py` | ✅ Built | `simulate_scenario()` + `run_monte_carlo()` already exist |
-| **RECOVERY_CATALOG** | `backend/simulator/recovery.py` | ✅ Built | 6 named actions with subsystem modifiers. ATHENA's input. |
-| **ORACLE** | `backend/oracle/agent.py` | 🟡 Scaffolded | Wrapper around `run_monte_carlo` — needs wiring |
-| **CHRONICLE, VITALS, ATHENA, GUARDIAN, QUARTERMASTER, SCRIBE** | — | ❌ Not built | Build in order below |
+| **3D Landing + Dashboard UI** | `src/App.jsx` | ✅ Working | Three.js globe, camera dolly, satellite GLB, full agent panels — **but still 100% `setTimeout` fakes, zero WebSocket/fetch calls.** This is the actual current blocker. |
+| **SENTINEL** (XGBoost) | `backend/models/sentinel_production.pkl` | ✅ Working, regenerated | Was a broken git-lfs pointer stub as of 2026-09-03 — retrained from real local OPSSAT data, now a real 1.38MB model, F1 0.65 row-level. Structurally blind to all 6 simulator faults on its own (flatline-only features) — **must be combined with Engine B**, see below. |
+| **Engine B** | `backend/sentinel/engine_b.py` | ✅ Built | Physics-threshold detector, zero training needed. Fires correctly on the 3 MVP faults, zero false positives on nominal. `combined_score(ml_score, state)` = `max(SENTINEL, Engine B)`, degrades gracefully if the `.pkl` fails to load. |
+| **SimulatorTelemetryProvider** | `backend/sherlock/simulator_provider.py` | ✅ Built | Bridges `SatelliteState` → SHERLOCK's `TelemetrySnapshot`. Smoke-tested. |
+| **SHERLOCK** (LLM + graph) | `backend/sherlock/agent.py` | ✅ Built | Claude via OpenRouter, graph-constrained, 3-retry validation loop. 18-edge causal graph confirmed real. |
+| **Physics Simulator** | `backend/simulator/engine.py` | ✅ Built | `simulate_scenario()` + `run_monte_carlo()` exist and work. |
+| **RECOVERY_CATALOG** | `backend/simulator/recovery.py` | ✅ Built | 6 named actions with subsystem modifiers. |
+| **ORACLE** | `backend/oracle/agent.py` | ✅ Actually fully wired | Confirmed `run_oracle()`, `_evaluate_action()`, fallback ranking mode all work and call `run_monte_carlo` for real. Just needs `backend/api.py` to import and call it. |
+| **requirements.txt** | `backend/requirements.txt` | ✅ Built | Didn't exist before. Install this on whichever laptop runs the demo. |
+| **`backend/api.py`** (the bridge) | — | ❌ **Does not exist — this is the #1 blocker** | Nothing above matters to a judge until this exists and the frontend talks to it. |
+| CHRONICLE, VITALS, ATHENA, GUARDIAN, QUARTERMASTER, SCRIBE | — | ❌ Not built | Build in the order below, after the bridge |
 
 ---
 
 ## Architecture Overview
 
 ```
-[Browser Frontend]
+[Browser Frontend — src/App.jsx]
        │  WebSocket ws://localhost:8000/ws/mission
        │
-[FastAPI Bridge — backend/api.py]  ← BUILD THIS FIRST
+[FastAPI Bridge — backend/api.py]  ← BUILD THIS FIRST, BLOCKS EVERYTHING
        │
-       ├── simulate_scenario()     [simulator/engine.py — EXISTS]
-       ├── SENTINEL.score()        [sentinel/explain_anomaly.py — EXISTS]
-       ├── SHERLOCK.diagnose()     [sherlock/agent.py — EXISTS]
-       ├── ORACLE.simulate_all()   [oracle/agent.py — WRAP]
-       ├── VITALS.compute()        [backend/vitals.py — BUILD]
-       ├── CHRONICLE.log()         [backend/chronicle.py — BUILD]
-       ├── ATHENA.plan()           [backend/athena/ — BUILD]
-       ├── GUARDIAN.check()        [backend/guardian.py — BUILD]
-       ├── QUARTERMASTER.schedule() [backend/quartermaster.py — BUILD]
-       └── SCRIBE.generate()       [backend/scribe.py — BUILD]
+       ├── simulate_scenario()         [simulator/engine.py — EXISTS]
+       ├── SENTINEL.combined_score()   [sentinel/engine_b.py + sentinel_production.pkl — EXISTS]
+       ├── SHERLOCK.diagnose()         [sherlock/agent.py + simulator_provider.py — EXISTS]
+       ├── run_oracle()                [oracle/agent.py — EXISTS, fully wired]
+       ├── VITALS.compute()            [backend/vitals.py — BUILD, cheap]
+       ├── CHRONICLE.log()             [backend/chronicle.py — BUILD, cheap]
+       ├── ATHENA.plan()               [backend/athena/ — BUILD, LLM-heavy]
+       ├── guardian_decide()           [backend/guardian.py — BUILD, rule-based, see MVP section]
+       ├── QUARTERMASTER.schedule()    [backend/quartermaster.py — BUILD, mostly static]
+       └── SCRIBE.generate()           [backend/scribe.py — BUILD, templating]
 ```
 
 ---
 
-## Phase 1 — The Bridge 🔴 HIGHEST PRIORITY (Hours 1–4)
+## Phase 1 — The Bridge 🔴 BLOCKS EVERYTHING (backend)
 
-**Goal:** Replace fake JS timers with a real Python pipeline. One button click → real data flowing.
-
-### What to build: `backend/api.py`
+**Goal:** One button click → real data flowing over a real WebSocket. Nothing else matters until this exists.
 
 ```python
-# FastAPI app with WebSocket
-# POST /trigger — starts the fault scenario
-# WS  /ws/mission — streams JSON events to frontend
-
+# backend/api.py
 from fastapi import FastAPI, WebSocket
 from backend.simulator.engine import simulate_scenario
-from backend.sentinel.explain_anomaly import SentinelScorer
+from backend.sentinel.engine_b import combined_score
 from backend.sherlock.agent import SherlockAgent
+from backend.sherlock.simulator_provider import SimulatorTelemetryProvider
+from backend.oracle.agent import run_oracle
+
+# POST /trigger  {"fault": "tcs_thermal_runaway", "severity": 0.7}
+# WS   /ws/mission — streams JSON events shaped per the contract below
 ```
 
-### WebSocket message shapes (frontend already expects these formats):
+**Full WebSocket message contract — see [`backend.md`](backend.md) for every message type** (`telemetry`, `sentinel_alert`, `sherlock_diagnosis`, `oracle`, `guardian`, `athena`, `quartermaster`, `scribe`). The 3 that existed before (`telemetry`, `sentinel_alert`, `sherlock_diagnosis`) are unchanged; the other 5 are newly specified there so frontend and backend don't drift while building in parallel.
 
-```json
-// Telemetry update (every 10 simulated seconds)
-{"type": "telemetry", "ts": 240, "battery_soc": 0.72, "eps_load": 0.89,
- "panel_temp": 42.1, "cpu_load": 0.74, "comm_link": "Stable", "tcs_trend": "+4.2°C/hr"}
+### Frontend change in `src/App.jsx` (this is Mohit's first task)
 
-// SENTINEL fires
-{"type": "sentinel_alert", "anomaly_id": "ANO-001", "score": 0.94,
- "flagged_subsystem": "EPS", "severity": "HIGH"}
-
-// SHERLOCK diagnosis
-{"type": "sherlock_diagnosis", "primary_root_cause": "eps_battery_degradation",
- "causal_chain": ["eps_battery_degradation", "EPS", "TCS"],
- "urgency": "HIGH", "confidence_score": 0.91, "time_to_critical_estimate_minutes": 23}
-```
-
-### Frontend change in `src/App.jsx`:
 Replace the fake `setTimeout` cascade in `triggerAnomaly()` with:
 ```js
 const ws = new WebSocket('ws://localhost:8000/ws/mission');
@@ -83,246 +122,151 @@ ws.onmessage = (e) => {
   const msg = JSON.parse(e.data);
   if (msg.type === 'telemetry') updateTelemetry(msg);
   if (msg.type === 'sentinel_alert') setScenarioPhase('detected');
-  if (msg.type === 'sherlock_diagnosis') { setScenarioPhase('diagnosing'); ... }
+  if (msg.type === 'sherlock_diagnosis') setScenarioPhase('diagnosing');
+  if (msg.type === 'guardian') {
+    if (msg.requires_human_approval) setScenarioPhase('awaiting_approval');
+    else setScenarioPhase('auto_executed');
+  }
 };
-fetch('http://localhost:8000/trigger', { method: 'POST' });
+fetch('http://localhost:8000/trigger', {
+  method: 'POST',
+  body: JSON.stringify({ fault: selectedFault, severity: sliderValue }),
+});
 ```
 
-### Fault to use for demo:
-`eps_battery_degradation` — hits EPS → TCS → OBC cascade which gives best visual impact.
-`simulate_scenario(fault="eps_battery_degradation", severity=0.7, duration=3600, dt=10)`
+**API response caching — do not skip this.** Cache one full real response set (telemetry + sentinel_alert + sherlock_diagnosis + guardian) for each of the 3 MVP faults as static JSON fallback files. If the LLM call is slow/down mid-demo, serve the cached response with a visible `[CACHED]` label rather than the demo hanging. This is the single highest-leverage 20 minutes you can spend before going on stage.
 
 ---
 
-## Phase 2 — VITALS + CHRONICLE (Hours 4–6)
+## Later, once the MVP is solid (we have the hours — do these too)
 
-### VITALS: `backend/vitals.py`
+Nothing below is a "nice to have we'll probably cut." With 40 hours, the MVP (Phase 1 + the 3-card/2-path demo) should take a fraction of the time budget. Once it's demoed clean at least twice end-to-end, keep building — the fuller pipeline is a straightforwardly better demo, not scope creep.
 
-Weighted health score from `SatelliteState`. No ML, just arithmetic:
-
+### Phase 2 — VITALS + CHRONICLE (no LLM, cheap)
 ```python
-def compute_health_score(state: SatelliteState) -> dict:
+def compute_health_score(state) -> dict:
     battery_score = state.eps.battery_soc * 100        # weight: 35%
     thermal_score = max(0, 100 - abs(state.tcs.panel_temp - 25) * 2)  # weight: 25%
     cpu_score = (1 - state.obc.cpu_load) * 100          # weight: 20%
     comms_score = (1 - state.ttc.bit_error_rate) * 100  # weight: 20%
-    
-    overall = (battery_score * 0.35 + thermal_score * 0.25 +
-               cpu_score * 0.20 + comms_score * 0.20)
-    
+    overall = battery_score*0.35 + thermal_score*0.25 + cpu_score*0.20 + comms_score*0.20
     return {"overall_score": round(overall, 1), "rul_orbits": compute_rul(state)}
 ```
+CHRONICLE: threshold watcher, string templates, no LLM. See `backend.md` for the exact threshold table (recalibrated — the original numbers false-positive on this simulator's nominal thermal cycling, see `audit_findings.md` §3).
 
-### CHRONICLE: `backend/chronicle.py`
+### Phase 3 — Re-tune the other 3 faults (backend, ~30-45 min)
+Once the MVP's 3 cards are proven, extend the scenario picker to all 6 by fixing `eps_battery_degradation`/`adcs_reaction_wheel_degradation`/`eps_cascade_power_failure`'s modifier magnitudes in `faults.py` so they produce a visible excursion within ~10-20 minutes of sim time instead of needing hours. Re-run `run_monte_carlo` afterward to confirm ORACLE's outcome distributions still make sense — these constants feed both.
 
-Threshold watcher — no LLM, just string templates:
+### Phase 4 — ATHENA (LLM-heavy, copy SHERLOCK's pattern)
+Prompt = SHERLOCK diagnosis + ORACLE results + RECOVERY_CATALOG. Claude outputs JSON with `reasoningCoT[]` + ordered `steps[]`. Temperature 0.1, max 3 retries, same validation pattern as `sherlock/agent.py`.
 
-```python
-THRESHOLDS = {
-    "battery_soc": {"warn": 0.50, "critical": 0.25},
-    "cpu_load":    {"warn": 0.70, "critical": 0.90},
-    "panel_temp":  {"warn": 55.0, "critical": 80.0},
-}
-def check_thresholds(state, prev_state) -> list[str]:
-    logs = []
-    if state.eps.battery_soc < THRESHOLDS["battery_soc"]["warn"]:
-        logs.append(f"> ⚠ WARN: EPS Battery SOC at {state.eps.battery_soc*100:.1f}%")
-    return logs
-```
+### Phase 5 — QUARTERMASTER (mostly static)
+2 hardcoded ground-station passes (realistic names/times). If severity HIGH/CRITICAL, offload 35% load to a backup satellite in the fixture fleet.
 
----
+### Phase 6 — SCRIBE
+Jinja2 template collecting all agent outputs into a markdown runbook. One small Claude call for a 2-sentence executive summary. Triggers a `.txt`/`.md` auto-download.
 
-## Phase 3 — ORACLE (Hours 6–9)
-
-Wire `backend/oracle/agent.py` (already scaffolded) around `run_monte_carlo`:
-
-```python
-from backend.simulator.engine import run_monte_carlo
-
-def simulate_all_options(current_state, sherlock_diagnosis, n_runs=50):
-    actions = ["shed_nonessential_load", "switch_redundant_power_bus"]
-    results = {}
-    for action in actions:
-        results[action] = run_monte_carlo(
-            current_state=current_state, proposed_action=action,
-            n_runs=n_runs, steps=300, fault=sherlock_diagnosis.primary_root_cause)
-    return format_as_oracle_simulation(results)
-```
-
-Output: `{"type": "oracle", "plans": [{"name": "Plan A", "nominal_recovery_rate": 0.87, ...}]}`
-
----
-
-## Phase 4 — ATHENA (Hours 9–13) 🤖 Only LLM-heavy build
-
-Copy SHERLOCK's pattern exactly. Prompt = SHERLOCK diagnosis + ORACLE results + RECOVERY_CATALOG.
-Claude outputs JSON with `reasoningCoT[]` array + ordered `steps[]` list.
-Temperature: 0.1 (same as SHERLOCK). Max retries: 3. Validate JSON schema same way.
-
----
-
-## Phase 5 — GUARDIAN (Hours 13–16)
-
-No LLM. Map SHERLOCK urgency field:
-- LOW/MEDIUM → `AUTOMATED_GUARDED` (auto-executes, logs it)
-- HIGH/CRITICAL → `MANUAL_INTERLOCK` (waits for UI toggle)
-
-**Bonus wow factor:** Wire Z3 solver for one formal constraint proof:
-`solver.add(battery_soc > 0.15)` → display "Formally Verified ✓" in UI
-
----
-
-## Phase 6 — QUARTERMASTER (Hours 16–18) — LOW PRIORITY
-
-2 hardcoded ground station passes (realistic names + times). Load offload rule:
-- If severity HIGH/CRITICAL → offload 35% load to backup satellite in fleet.
-
----
-
-## Phase 7 — SCRIBE (Hours 18–21)
-
-Jinja2 template collecting all agent outputs into markdown runbook.
-One tiny Claude call for 2-sentence executive summary paragraph only.
-Triggers auto-download of `.txt` runbook file.
-
----
-
-## Phase 8 — Full End-to-End Run (Hours 21–24)
-
-1. `uvicorn backend.api:app --reload --port 8000`
-2. `npm run dev`
-3. Run full pipeline at least 3 times clean before touching anything else
-4. Fix broken things only — **no new features at this stage**
+### Phase 7 — Full end-to-end run
+1. `pip install -r backend/requirements.txt` on the actual demo laptop
+2. `uvicorn backend.api:app --reload --port 8000`
+3. `npm run dev`
+4. Run the full pipeline at least 3 times clean, on all demo-ready faults, before touching anything else
+5. Fix only what's broken — no new features once this phase starts
 
 ---
 
 ## WOW Factors — Things That Make Judges Stop
 
-1. **Real OPSSAT-AD data on SENTINEL** — "This XGBoost was trained on 67,000 rows of real ESA satellite telemetry. F1 of 0.89 on held-out test set. Not synthetic."
-
-2. **Graph-constrained SHERLOCK** — Claude can ONLY pick root causes from the physical causal graph. It cannot hallucinate a subsystem not connected to the flagged one. Show the graph visually.
-
-3. **run_monte_carlo: 50+ physics simulations in ~2 seconds** — Real stochastic outcomes from a real orbital physics model. Three probability bars = real numbers, not made up.
-
-4. **Human-in-the-loop GUARDIAN toggle** — Flip on camera. "For CRITICAL urgency, this never auto-executes. Every approval is logged to the runbook."
-
-5. **SCRIBE runbook auto-downloads** — "This is the audit trail mission controllers keep on file."
-
-6. **Z3 formal verification (bonus)** — "We mathematically proved this recovery action can never drop battery below survival threshold." Even non-technical judges feel the weight of this.
-
-7. **Scenario Picker** — Judges choose which fault to inject (4 options with severity sliders). Interactive = impressive.
-
-8. **Agent Timeline Strip** — Horizontal bar showing SENTINEL → SHERLOCK → ORACLE → ATHENA → GUARDIAN → SCRIBE, each lighting up as it completes. Judges see the pipeline working in real time.
+1. **Two GUARDIAN outcomes, live, same pipeline** — the easy auto-executed path and the human-approval path from the *same* 3 real faults, controlled by one severity slider. This is the actual differentiator, not a feature list.
+2. **The FDIR/Safe-Mode tier** (if built) — "sudden temperature spike" is a known, standard question in spacecraft ops, and `tcs_thermal_runaway` is that exact scenario. Answering it with real spacecraft doctrine (FDIR, Safe Mode) rather than improvising is a strong Q&A moment.
+3. **Real OPSSAT-AD data on SENTINEL** — "trained on real ESA satellite telemetry, F1 0.65 / ROC-AUC 0.79 on held-out test data. Not synthetic." (Verified number — see `audit_findings.md`, do not cite the old 0.89 figure, it never existed in any results file.)
+4. **Graph-constrained SHERLOCK** — Claude can only pick root causes from the physical causal graph (18 real edges, confirmed in code). Show the graph visually.
+5. **`run_monte_carlo`: 100 physics simulations in ~2 seconds** — real stochastic outcomes, not made-up probability bars.
+6. **SCRIBE runbook auto-downloads** (if built) — the audit trail mission controllers keep on file.
+7. **Agent Timeline Strip** — horizontal bar showing which agent is active, lighting up as the real pipeline progresses.
 
 ---
 
-## NEW: Scenario Picker UI (Phase 1 Frontend)
+## Scenario Picker UI (frontend)
 
-Replace the single "Trigger Anomaly" button with a modal showing 4 scenario cards:
+3 scenario cards (not 6 — see MVP section for why), each with a severity slider that determines which GUARDIAN path plays out:
 
-| Scenario | Fault Key | Default Severity | Visual |
-|---|---|---|---|
-| 🔋 Battery Degradation | `eps_battery_degradation` | 0.7 | SOC drops gradually |
-| 🌡️ Thermal Runaway | `tcs_thermal_runaway` | 0.7 | Temp climbs unbounded |
-| ⚡ Cascading Power Failure | `eps_cascade_power_failure` | 0.9 (fixed) | All 5 subsystems degrade |
-| 🔄 Reaction Wheel Failure | `adcs_reaction_wheel_degradation` | 0.6 | Attitude error grows |
+| Scenario | Fault Key | Severity range | Low end → | High end → |
+|---|---|---|---|---|
+| 🌡️ Thermal Runaway | `tcs_thermal_runaway` | 0.3 – 1.0 | AUTOMATED_GUARDED | MANUAL_INTERLOCK |
+| 📡 Signal Dropout | `ttc_signal_dropout` | 0.3 – 1.0 | AUTOMATED_GUARDED | MANUAL_INTERLOCK |
+| 🚀 Thruster Fault | `propulsion_thruster_fault` | 0.3 – 1.0 | AUTOMATED_GUARDED | MANUAL_INTERLOCK |
 
-Each card sends `POST /trigger` with `{ fault: "<key>", severity: <value> }`.
-
----
-
-## NEW: Digital Twin Emphasis (Throughout)
-
-- Label the physics simulator section in the UI as **"DIGITAL TWIN ENGINE"**
-- Show a visible badge: "Physics-Based Digital Twin | 6 Subsystems | 18 Causal Edges"
-- During Monte Carlo, show count-up: "Simulating 87/100 futures..."
-- In ORACLE results panel: "Digital Twin Prediction Results"
+Each card sends `POST /trigger` with `{ fault: "<key>", severity: <value> }`. Exact severity→urgency mapping is SHERLOCK's call (LLM-driven), but as a UI hint, treat severity ≥ 0.7 as "likely high-risk path" so the slider itself communicates what's about to happen.
 
 ---
 
-## NEW: Split-Screen View (Phase 3)
+## Digital Twin Emphasis (throughout the UI)
 
-When ORACLE runs, show left = current state bars, right = predicted future state bars.
-The "Do Nothing" baseline on the right shows what happens without intervention.
-
----
-
-## NEW: API Response Caching (Phase 1)
-
-Cache one full SHERLOCK response for `eps_battery_degradation` as JSON fallback.
-If OpenRouter API is slow/down during demo, serve cached response with `[CACHED]` label.
-**This is your safety net. Do not skip this.**
+- Label the physics simulator section **"DIGITAL TWIN ENGINE"**
+- Visible badge: "Physics-Based Digital Twin | 6 Subsystems | 18 Causal Edges"
+- During Monte Carlo: count-up "Simulating 87/100 futures..."
+- ORACLE results panel: "Digital Twin Prediction Results"
 
 ---
 
-## NEW: Real Satellite Fault Physics Rules
+## Real Satellite Fault Physics Rules (Engine B thresholds — recalibrated)
 
-These are real engineering thresholds that make our simulator credible:
+| Parameter | Warning | Critical | Mission Loss | Note |
+|---|---|---|---|---|
+| Battery SOC | < 50% | < 25% | < 15% | unchanged |
+| Bus Voltage (28V bus) | < 25V | < 22V | < 18V | unchanged |
+| Panel Temperature | > 55°C or < -10°C | > 80°C or < -20°C | > 100°C | unchanged |
+| **Battery Temperature** | **> 44°C** | **> 48°C** | **> 52°C** | **recalibrated — original 35/40/45°C false-positives on this simulator's nominal orbital thermal cycling (verified up to 41.4°C with zero fault active)** |
+| Attitude Error | > 5° | > 15° | > 30° (tumble) | unchanged |
+| Reaction Wheel Speed | > 5000 RPM | > 6000 RPM (saturation) | Wheel failure | unchanged |
+| Signal Strength | < -95 dBm | < -105 dBm | < -115 dBm (loss of lock) | unchanged |
+| CPU Load | > 70% | > 90% | Watchdog trip | unchanged |
 
-| Parameter | Warning | Critical | Mission Loss |
-|---|---|---|---|
-| Battery SOC | < 50% | < 25% | < 15% |
-| Bus Voltage (28V bus) | < 25V | < 22V | < 18V |
-| Panel Temperature | > 55°C or < -10°C | > 80°C or < -20°C | > 100°C |
-| Battery Temperature | > 35°C | > 40°C | > 45°C (thermal runaway risk) |
-| Attitude Error | > 5° | > 15° | > 30° (tumble) |
-| Reaction Wheel Speed | > 5000 RPM | > 6000 RPM (saturation) | Wheel failure |
-| Signal Strength | < -95 dBm | < -105 dBm | < -115 dBm (loss of lock) |
-| CPU Load | > 70% | > 90% | Watchdog trip |
-
-**ORACLE must always include a "Do Nothing" baseline** — this shows judges what happens without intervention.
-
----
-
-## Cut Priority (If Time Runs Out)
-
-| Cut | Fallback |
-|---|---|
-| QUARTERMASTER orbital mechanics | Static labeled "simulated" output |
-| GUARDIAN Z3 proof | Plain Python rule checks, say so honestly |
-| SCRIBE LLM summary | Jinja2 template sentence |
-| CHRONICLE live streaming | Short static log matching scenario |
-| **NEVER CUT** | **Phase 1 Bridge + SENTINEL + SHERLOCK** |
+This table is implemented and tested in `backend/sentinel/engine_b.py` — don't hand-copy it elsewhere, import from there.
 
 ---
 
 ## Environment Setup
 
 ```bash
-# Python deps
-pip install fastapi uvicorn websockets openai pydantic numpy joblib scikit-learn xgboost jinja2
-
-# API key (OpenRouter)
+pip install -r backend/requirements.txt   # now exists, wasn't there before
 export OPENROUTER_API_KEY="your_key_here"
-
-# Start backend
-uvicorn backend.api:app --reload --port 8000
-
-# Start frontend (separate terminal)
-npm run dev
+uvicorn backend.api:app --reload --port 8000   # backend
+npm run dev                                     # frontend, separate terminal
 ```
+
+**Model files are gitignored and git-lfs is not configured in this repo.** Whoever runs the live demo needs `backend/models/*.joblib`/`*.pkl` copied onto that machine directly (zip + AirDrop/USB/Slack, not git). See `backend.md` for full details — this bit anyone who's picked up backend cold tonight.
 
 ---
 
-## File Map — What to Create
+## File Map
 
 ```
 aero_astra/
 ├── backend/
-│   ├── api.py               ← CREATE Phase 1 — FastAPI WebSocket bridge
-│   ├── vitals.py            ← CREATE Phase 2
-│   ├── chronicle.py         ← CREATE Phase 2
-│   ├── guardian.py          ← CREATE Phase 5
-│   ├── quartermaster.py     ← CREATE Phase 6
-│   ├── scribe.py            ← CREATE Phase 7
+│   ├── api.py                    ← BUILD FIRST — FastAPI WebSocket bridge
+│   ├── requirements.txt          ✅ EXISTS
+│   ├── vitals.py                 ← BUILD Phase 2
+│   ├── chronicle.py              ← BUILD Phase 2
+│   ├── guardian.py               ← BUILD (MVP — see decision function above)
+│   ├── quartermaster.py          ← BUILD Phase 5
+│   ├── scribe.py                 ← BUILD Phase 6
 │   ├── athena/
-│   │   ├── agent.py         ← CREATE Phase 4
-│   │   ├── prompts.py       ← CREATE Phase 4
-│   │   └── schemas.py       ← CREATE Phase 4
-│   ├── simulator/           ✅ EXISTS
-│   ├── sentinel/            ✅ EXISTS
-│   ├── sherlock/            ✅ EXISTS
-│   ├── oracle/              🟡 EXISTS — wire it
-│   └── models/              ✅ EXISTS — sentinel_production.pkl
-└── src/App.jsx              ← UPDATE Phase 1 — add WebSocket client
+│   │   ├── agent.py              ← BUILD Phase 4
+│   │   ├── prompts.py            ← BUILD Phase 4
+│   │   └── schemas.py            ← BUILD Phase 4
+│   ├── simulator/                ✅ EXISTS
+│   ├── sentinel/
+│   │   ├── engine_b.py           ✅ EXISTS — physics threshold detector
+│   │   └── train.py              ✅ FIXED — portable path, retrained model
+│   ├── sherlock/
+│   │   └── simulator_provider.py ✅ EXISTS — the bridge class
+│   ├── oracle/                   ✅ EXISTS — wire it into api.py, don't rebuild
+│   └── models/                   ✅ EXISTS locally — must be copied to demo laptop manually
+└── src/App.jsx                   ← UPDATE Phase 1 — add WebSocket client, this is Mohit's task
 ```
+
+---
+
+*See [`audit_findings.md`](audit_findings.md) for the full verification detail behind every claim above, and [`backend.md`](backend.md) for the complete backend handoff brief — API contract, current state, and phase-by-phase backend task list, written for whoever is picking this up without today's context.*

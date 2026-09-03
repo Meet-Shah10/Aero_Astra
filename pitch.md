@@ -3,6 +3,8 @@
 > This is not a technical doc. This is how you talk to judges who may not be engineers.
 > Every section has a "what to say" and a "what not to say."
 
+> **Current demo scope:** the live demo is 3 real scenario cards — Thermal Runaway, Signal Dropout, Thruster Fault — each a genuine backend pipeline run, not a scripted animation. The severity slider on each card decides which of two real outcomes plays out: an automatic recovery (low severity) or a human-approval gate (high severity). That branching — same pipeline, two different real outcomes — is the actual differentiator to lead with, more than the agent count. If the fuller pipeline (ATHENA/QUARTERMASTER/SCRIBE) isn't built yet when you're pitching, use the **MVP Demo Script** near the bottom instead of the full 8-step one below — see `roadmap.md` for what's currently real vs. still being built.
+
 ---
 
 ## The One-Line Hook (Open Every Pitch With This)
@@ -59,13 +61,13 @@ Then walk through the agents one at a time — **always in plain English**:
 *"This is the dashboard. Everything is green. The satellite is nominal. Battery healthy, communications stable, all systems go."*
 
 ### Step 2 — Trigger the fault
-Click "Trigger Fault Scenario."
+Pick one of the 3 scenario cards — Thermal Runaway is the strongest opener, it's the one with the cleanest, fastest visible signal. Click it.
 
-*"I'm going to inject a power system fault — the kind of thing that actually happens on orbit. Watch what happens."*
+*"I'm going to inject a real fault into our physics digital twin — a heat pipe failure that lets panel temperature climb unbounded. Watch what happens."*
 
 Narrate as it unfolds:
-- *"SENTINEL just detected an anomaly on the power bus. That's the early warning."*
-- *"SHERLOCK is now building a causal chain — tracing the problem from the EPS through to the thermal system..."*
+- *"SENTINEL just detected an anomaly on the thermal system. That's the early warning."*
+- *"SHERLOCK is now building a causal chain — tracing the problem from thermal through to attitude control and power..."*
 
 ### Step 3 — Point at the causal graph
 *"Here's what SHERLOCK found. The battery degradation is causing the thermal system to overheat, which is stressing the on-board computer. That's a cascade failure — and SHERLOCK found it in 2 seconds."*
@@ -78,10 +80,17 @@ Narrate as it unfolds:
 ### Step 5 — Show ATHENA's reasoning
 *"ATHENA took ORACLE's results and wrote a step-by-step recovery procedure. You can see its chain of thought — why it chose this plan, why it ordered the steps this way."*
 
-### Step 6 — Click the GUARDIAN toggle yourself
-Don't let it auto-execute. Flip the toggle on camera.
+### Step 6 — Show GUARDIAN's two outcomes (this is the moment to slow down)
 
-*"For HIGH urgency situations, nothing happens without a human in the loop. I just approved the procedure. The system logged my approval with a timestamp."*
+Run the scenario twice, back to back, at two different severities — this is worth more stage time than any single panel.
+
+**Low severity first:** *"At this severity, GUARDIAN judges this low-risk. Watch — it just executed the fix on its own, and logged exactly what it did and why. No human needed for the easy case."*
+
+**Then high severity, same fault:** *"Now watch the same pipeline at higher severity. Same detection, same diagnosis — but GUARDIAN will not auto-execute this one."* Don't let it proceed. Click the approval toggle yourself, on camera. *"For high-risk situations, nothing happens without a human in the loop. I just approved the procedure. The system logged my approval with a timestamp."*
+
+*"Same pipeline, same three agents underneath — the only thing that changed is how dangerous the situation actually is. That's not a demo trick, that's the policy: autonomous when it's safe to be, human-gated when it isn't."*
+
+**If asked "what about something faster than a human can react to":** this is the FDIR / Safe Mode question — see the Q&A cheat sheet below, it's worth rehearsing verbatim.
 
 ### Step 7 — Show SCRIBE runbook
 *"And here's the complete audit trail — every agent's decision, every step of the procedure, the ORACLE simulation results, timestamps on everything. This is what mission controllers and regulators would keep on file. It took zero manual effort to produce."*
@@ -108,6 +117,9 @@ Don't let it auto-execute. Flip the toggle on camera.
 **"How much compute does this need?"**
 > "The detection and diagnosis happen in under 5 seconds on a standard server. The Monte Carlo simulation runs 100 physics simulations in about 2 seconds on CPU — no GPU needed. It's deployable on a standard cloud instance."
 
+**"What about something time-critical — like a sudden temperature spike, right now?"**
+> "That's a well-known problem in real spacecraft engineering called FDIR — Fault Detection, Isolation, and Recovery. For a genuinely time-critical event, our system doesn't wait for the full diagnosis-and-approval pipeline. GUARDIAN has an autonomous safing tier that fires immediately once our estimate of time-to-critical drops below a threshold — it takes a cheap, reversible protective action right away and notifies the human operator in parallel, not before. The full root-cause diagnosis and optimal recovery plan still run, concurrently, not as a blocker. This mirrors how real satellites use 'Safe Mode': act fast and safe first, reason carefully second." *(If this tier isn't built yet when you're asked: "That's our next build — the architecture already has the field we need for it, time-to-critical-minutes, we just haven't wired the autonomous trigger yet. Here's exactly how it'd work..." and describe it. Judges respect a precise answer to "not built yet" far more than a vague one to something that is.)*
+
 ---
 
 ## Pitch Structure (2 minutes / 5 minutes / 10 minutes)
@@ -124,6 +136,20 @@ Same as 2-min but expand Step 3 (demo clip) and Step 4 (ORACLE bars). Add one Q&
 
 ### 10-minute version:
 Full demo walkthrough (Steps 1–8) + 2 minutes of Q&A.
+
+---
+
+## MVP Demo Script (use this if ATHENA/QUARTERMASTER/SCRIBE aren't built yet)
+
+If you're pitching before the full 8-agent pipeline is finished, don't apologize for it or promise what isn't built — demo exactly what's real, and it's still a strong story on its own.
+
+1. **Open on calm state** — same as Step 1 above.
+2. **Click the Thermal Runaway card at low severity.** Narrate SENTINEL detecting it, SHERLOCK diagnosing it (real causal chain, real graph constraint — same talking point as Step 3 above).
+3. **Show GUARDIAN auto-executing.** *"At this severity, the system judged this safe to handle on its own. It just did — no human needed."*
+4. **Re-run at high severity.** *"Now watch the same fault, more severe. This time it won't auto-execute."* Click the approval yourself, on camera.
+5. **Close with the honest scope line:** *"Right now we're demoing three fault types end-to-end on a real physics digital twin, with a real anomaly detector trained on real ESA data, and a real two-tier safety policy — autonomous when it's safe, human-gated when it isn't. The recovery-planning and audit-trail agents are the next layer we're building on top of this same real pipeline, not replacing it."*
+
+This script uses SENTINEL, SHERLOCK, ORACLE (for the recovery action GUARDIAN executes/proposes), and GUARDIAN — all four are real and wired, even before ATHENA/QUARTERMASTER/SCRIBE exist. It's shorter than the full script, but nothing in it is faked, which matters more to a technical judge than agent count.
 
 ---
 
@@ -150,6 +176,8 @@ Full demo walkthrough (Steps 1–8) + 2 minutes of Q&A.
 If a judge pushes on credibility, use this:
 
 *"We made a deliberate choice to be honest about what's real vs simulated. SENTINEL's detection uses real ESA data. The physics simulator is built on real orbital mechanics equations. Everything else in the pipeline uses that simulator as ground truth — and we label it 'synthetic' on our slides. We think that honesty is itself a differentiator, because judges who've seen real satellite ops can tell the difference between a system built on real constraints and a dashboard with fake numbers."*
+
+**A smaller, quieter version of the same point, if you notice a telemetry number sitting flat on screen:** *"That number isn't moving right now because that's genuinely what the physics model is outputting — this isn't a scripted animation, it's a live stream from a running simulation. Sometimes real data is just steady for a few seconds. We'd rather show you that than fake some jitter to make it look busier."* Say this only if it comes up naturally — don't preemptively apologize for correct behavior.
 
 ---
 
