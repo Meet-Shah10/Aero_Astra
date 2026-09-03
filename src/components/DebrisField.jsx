@@ -88,7 +88,7 @@ export default function DebrisField() {
         <bufferGeometry>
           <bufferAttribute attach="attributes-position" args={[cyanSatData, 3]} />
         </bufferGeometry>
-        <pointsMaterial size={0.35} color="#00E5FF" transparent opacity={0.9} depthWrite={false} />
+        <pointsMaterial size={0.35} color="#EDEEF2" transparent opacity={0.9} depthWrite={false} />
       </points>
 
       {/* Magenta satellites */}

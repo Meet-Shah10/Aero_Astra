@@ -1,0 +1,113 @@
+.pill-nav {
+  --nav-h: 36px;
+  --pill-pad-x: 20px;
+  --pill-gap: 4px;
+  width: max-content;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+}
+
+.pill-nav-items {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: var(--nav-h);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 9999px;
+}
+
+.pill-list {
+  list-style: none;
+  display: flex;
+  align-items: stretch;
+  gap: var(--pill-gap);
+  margin: 0;
+  padding: 3px;
+  height: 100%;
+}
+
+.pill-list > li {
+  display: flex;
+  height: 100%;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 0 var(--pill-pad-x);
+  background: var(--pill-bg, #101116);
+  color: var(--pill-text, rgba(255, 255, 255, 0.7));
+  border: none;
+  text-decoration: none;
+  border-radius: 9999px;
+  box-sizing: border-box;
+  font-family: var(--font-mono, monospace);
+  font-weight: 600;
+  font-size: 10.5px;
+  line-height: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  white-space: nowrap;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  transition: color 0.2s ease;
+}
+
+.pill .hover-circle {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  border-radius: 50%;
+  background: var(--base, #EDEEF2);
+  z-index: 1;
+  display: block;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.pill .label-stack {
+  position: relative;
+  display: inline-block;
+  line-height: 1;
+  z-index: 2;
+}
+
+.pill .pill-label {
+  position: relative;
+  z-index: 2;
+  display: inline-block;
+  line-height: 1;
+  will-change: transform;
+}
+
+.pill .pill-label-hover {
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--hover-text, #0a0b0f);
+  z-index: 3;
+  display: inline-block;
+  will-change: transform, opacity;
+}
+
+.pill.is-active {
+  color: #fff;
+}
+
+.pill.is-active::after {
+  content: '';
+  position: absolute;
+  bottom: 5px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 3px;
+  height: 3px;
+  background: var(--base, #EDEEF2);
+  border-radius: 50%;
+  z-index: 4;
+}

@@ -2,7 +2,29 @@ import React, { useState, useEffect, useRef } from 'react';
 import ModelViewer from './components/ModelViewer';
 import Scene3D from './components/Scene3D';
 import RotatingEarth from './components/RotatingEarth';
+import PillNav from './components/PillNav';
+import AgentNav from './components/AgentNav';
+import AgentDetailPage from './components/AgentDetailPage';
+import BorderGlow from './components/BorderGlow';
 import './index.css';
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Agent roster — plain-English descriptions sourced verbatim from pitch.md's
+//  agent table. `status` reflects what's actually wired today (see
+//  audit_findings.md / backend.md), not aspirational architecture — an About
+//  page that overclaims is worse than one that's honest about what's live.
+// ─────────────────────────────────────────────────────────────────────────────
+const AGENT_ROSTER = [
+  { code: 'SENTINEL', role: 'The Early Warning System', desc: 'Watches all telemetry 24/7 and knows when something starts to look wrong — before a human would notice.', status: 'wired' },
+  { code: 'SHERLOCK', role: 'The Detective', desc: "When SENTINEL raises an alarm, SHERLOCK figures out why — tracing the problem back to its root cause through a physics-constrained causal graph.", status: 'wired' },
+  { code: 'ORACLE', role: 'The Simulator', desc: 'Runs 100 independent Monte Carlo simulations of each candidate fix before anything executes — odds, not guesses.', status: 'wired' },
+  { code: 'ATHENA', role: 'The Strategist', desc: "Using ORACLE's simulations, picks the best recovery plan and writes out every step, in order, with its reasoning.", status: 'planned' },
+  { code: 'GUARDIAN', role: 'The Safety Gate', desc: 'Low-risk fixes auto-execute and log themselves. High-risk fixes wait for a human to press approve — nothing executes without it.', status: 'wired' },
+  { code: 'QUARTERMASTER', role: 'The Logistics Manager', desc: 'Coordinates with ground stations and, if needed, shifts load to other satellites in the fleet.', status: 'planned' },
+  { code: 'SCRIBE', role: 'The Accountant', desc: "Every decision, every step, every agent's reasoning gets written into an audit trail automatically.", status: 'planned' },
+  { code: 'CHRONICLE', role: 'The Live Log', desc: 'A running event log of everything happening, in real time, as it happens.', status: 'wired' },
+  { code: 'VITALS', role: 'The Proactive Monitor', desc: 'Tracks subsystem health scores and remaining-useful-life estimates so degradation is visible before it becomes an anomaly.', status: 'wired' },
+];
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Fault scenario catalog — the 3 faults verified to produce a real, visible
@@ -135,9 +157,49 @@ function SystemMeter({ label }) {
     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
       <span style={{ fontSize: '8px', color: 'rgba(255,255,255,0.3)', letterSpacing: '0.15em', fontWeight: 'bold', textTransform: 'uppercase' }}>{label}</span>
       <div style={{ width: '40px', height: '3px', background: 'rgba(255,255,255,0.05)', borderRadius: '99px', overflow: 'hidden' }}>
-        <div style={{ width: `${val}%`, height: '100%', background: '#00E5FF', transition: 'width 0.8s ease' }} />
+        <div style={{ width: `${val}%`, height: '100%', background: '#EDEEF2', transition: 'width 0.8s ease' }} />
       </div>
-      <span style={{ fontSize: '9px', color: 'rgba(0,229,255,0.85)', fontFamily: 'monospace', minWidth: '28px', textAlign: 'right' }}>{val}%</span>
+      <span style={{ fontSize: '9px', color: 'rgba(230,232,236,0.85)', fontFamily: 'monospace', minWidth: '28px', textAlign: 'right' }}>{val}%</span>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  About / Agents page — second Dock destination
+// ─────────────────────────────────────────────────────────────────────────────
+function AboutView() {
+  return (
+    <div className="about-view fade-enter">
+      <div className="about-header">
+        <div className="about-eyebrow">MULTI-AGENT ARCHITECTURE</div>
+        <h2 className="about-title">Nine agents, one pipeline</h2>
+        <p className="about-lede">
+          Each agent has one job and hands off to the next — detection, diagnosis, simulation,
+          decision, and a safety gate that decides whether a human needs to be in the loop.
+        </p>
+      </div>
+
+      <div className="about-grid">
+        {AGENT_ROSTER.map(agent => (
+          <BorderGlow key={agent.code} borderRadius={8} glowRadius={22} fillOpacity={0.22} className="about-card-glow">
+            <div className="about-card">
+              <div className="about-card-top">
+                <span className="about-card-code">{agent.code}</span>
+                <span className={`about-card-status about-card-status--${agent.status}`}>
+                  {agent.status === 'wired' ? '● LIVE' : '○ PLANNED'}
+                </span>
+              </div>
+              <div className="about-card-role">{agent.role}</div>
+              <p className="about-card-desc">{agent.desc}</p>
+            </div>
+          </BorderGlow>
+        ))}
+      </div>
+
+      <div className="about-footnote">
+        LIVE agents run against the real physics digital twin during the demo. PLANNED agents are
+        represented as mocked panels on the dashboard until wired — see backend.md for build status.
+      </div>
     </div>
   );
 }
@@ -165,6 +227,14 @@ function App() {
     '> Telemetry linked on band S7.',
     '> SENTINEL: Monitoring 5 active assets.',
   ]);
+
+  // Which top-level page is active — PillNav switches between these two.
+  // No third "Missions" page: out of scope for the problem statement.
+  const [activeView, setActiveView] = useState('dashboard');
+
+  // Which agent's drill-down page is showing in the dashboard's main content
+  // area. null = the normal operational grid (3D view + bottom-bar controls).
+  const [activeAgentPage, setActiveAgentPage] = useState(null);
 
   // Scenario picker + comparison panel state
   const [showScenarioPicker, setShowScenarioPicker] = useState(false);
@@ -378,26 +448,25 @@ function App() {
             padding: '0 32px', borderBottom: '1px solid rgba(255,255,255,0.05)',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#00E5FF" strokeWidth="1.5">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#EDEEF2" strokeWidth="1.5">
                 <circle cx="12" cy="12" r="10" />
                 <polygon points="12,6 6,16 18,16" strokeLinejoin="round" />
               </svg>
               <span className="font-bold" style={{ letterSpacing: '0.3em', fontSize: '15px', color: '#fff' }}>AERO-ASTRA</span>
             </div>
 
-            <div style={{ display: 'flex', gap: '32px' }}>
-              {['DASHBOARD', 'TARGETS', 'MISSIONS'].map(link => (
-                <span key={link} style={{
-                  fontSize: '11px', letterSpacing: '0.2em', fontWeight: 'bold', cursor: 'pointer',
-                  color:link === 'DASHBOARD' ? '#00E5FF' : 'rgba(255,255,255,0.4)',
-                }}>{link}</span>
-              ))}
-          </div>
+            <PillNav
+              activeId={activeView}
+              items={[
+                { id: 'dashboard', label: 'Dashboard', onClick: () => setActiveView('dashboard') },
+                { id: 'about', label: 'About', onClick: () => setActiveView('about') },
+              ]}
+            />
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
             <div style={{ textAlign: 'right' }}>
               <div style={{ fontSize: '8px', letterSpacing: '0.15em', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', fontWeight: 'bold' }}>UTC TIME</div>
-              <div style={{ fontFamily: 'monospace', fontSize: '13px', fontWeight: 'bold', color: '#00E5FF', letterSpacing: '0.1em' }}><LiveClock /></div>
+              <div style={{ fontFamily: 'monospace', fontSize: '13px', fontWeight: 'bold', color: '#EDEEF2', letterSpacing: '0.1em' }}><LiveClock /></div>
             </div>
           </div>
         </div>
@@ -408,7 +477,7 @@ function App() {
         padding: '0 32px', background: 'rgba(0,0,0,0.2)',
       }}>
         <div style={{ fontSize: '9px', fontFamily: 'monospace', letterSpacing: '0.1em', color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase' }}>
-          MISSION CONTROL / DASHBOARD / <span style={{ color: '#00E5FF', fontWeight: 'bold' }}>ANOMALY RESPONSE</span>
+          MISSION CONTROL / {activeView === 'about' ? 'ABOUT' : 'DASHBOARD'} / <span style={{ color: '#EDEEF2', fontWeight: 'bold' }}>{activeView === 'about' ? 'AGENT ARCHITECTURE' : 'ANOMALY RESPONSE'}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: '#00FF88', fontFamily: 'monospace', fontWeight: 'bold' }}>
           <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#00FF88', display: 'inline-block', animation: 'blink-dots 1.5s infinite' }} />
@@ -428,7 +497,7 @@ function App() {
       display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#00E5FF" strokeWidth="1.5">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#EDEEF2" strokeWidth="1.5">
           <circle cx="12" cy="12" r="10" />
           <polygon points="12,6 6,16 18,16" strokeLinejoin="round" />
         </svg>
@@ -445,7 +514,7 @@ function App() {
         <div style={{ fontSize: '8px', letterSpacing: '0.15em', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', fontWeight: 'bold' }}>
           COORDINATED UNIVERSAL TIME
         </div>
-        <div style={{ fontFamily: 'monospace', fontSize: '14px', fontWeight: 'bold', color: '#00E5FF', letterSpacing: '0.1em' }}>
+        <div style={{ fontFamily: 'monospace', fontSize: '14px', fontWeight: 'bold', color: '#EDEEF2', letterSpacing: '0.1em' }}>
           <LiveClock />
         </div>
       </div>
@@ -469,16 +538,18 @@ function App() {
         TELEMETRY SYNCED &middot; MULTI-AGENT ACTIVE &middot; OPSSAT-AD LIVE
       </div>
 
-      <button className="launch-btn" onClick={handleLaunch} id="launch-mission-control">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0 }}>
-          <circle cx="12" cy="12" r="10" />
-          <line x1="22" y1="12" x2="18" y2="12" />
-          <line x1="6" y1="12" x2="2" y2="12" />
-          <line x1="12" y1="6" x2="12" y2="2" />
-          <line x1="12" y1="22" x2="12" y2="18" />
-        </svg>
-        LAUNCH MISSION CONTROL
-      </button>
+      <BorderGlow borderRadius={4} glowRadius={26} fillOpacity={0.25} className="launch-btn-glow">
+        <button className="launch-btn" onClick={handleLaunch} id="launch-mission-control">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0 }}>
+            <circle cx="12" cy="12" r="10" />
+            <line x1="22" y1="12" x2="18" y2="12" />
+            <line x1="6" y1="12" x2="2" y2="12" />
+            <line x1="12" y1="6" x2="12" y2="2" />
+            <line x1="12" y1="22" x2="12" y2="18" />
+          </svg>
+          LAUNCH MISSION CONTROL
+        </button>
+      </BorderGlow>
 
       {/* Coordinate corner decoration */}
       <div style={{
@@ -519,7 +590,7 @@ function App() {
             <div className="spin-ring" />
           </div>
 
-          <div style={{ fontSize: '10px', letterSpacing: '0.3em', color: '#00E5FF', textTransform: 'uppercase', fontWeight: 'bold', marginBottom: '6px' }}>
+          <div style={{ fontSize: '10px', letterSpacing: '0.3em', color: '#EDEEF2', textTransform: 'uppercase', fontWeight: 'bold', marginBottom: '6px' }}>
             INITIALIZING MISSION CONTROL...
           </div>
           <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginBottom: '16px' }}>
@@ -530,11 +601,11 @@ function App() {
           <div className="transition-log">
             {loadMessages.slice(0, loadStep).map((msg, i) => (
               <div key={i} style={{
-                color: i === loadStep - 1 ? '#00E5FF' : 'rgba(0,229,255,0.4)',
+                color: i === loadStep - 1 ? '#EDEEF2' : 'rgba(230,232,236,0.4)',
                 marginBottom: '3px', fontSize: '10px', fontFamily: 'monospace', letterSpacing: '0.08em',
               }}>
                 {i < loadStep - 1 && <span style={{ color: '#00FF88', marginRight: '4px' }}>✓</span>}
-                {i === loadStep - 1 && <span style={{ color: '#00E5FF', marginRight: '4px' }} className="dot-blink">▸</span>}
+                {i === loadStep - 1 && <span style={{ color: '#EDEEF2', marginRight: '4px' }} className="dot-blink">▸</span>}
                 {msg}
               </div>
             ))}
@@ -545,9 +616,9 @@ function App() {
             <div style={{
               height: '100%',
               width: `${(loadStep / loadMessages.length) * 100}%`,
-              background: 'linear-gradient(90deg, #00E5FF, #00FF88)',
+              background: 'linear-gradient(90deg, #EDEEF2, #00FF88)',
               transition: 'width 0.4s ease',
-              boxShadow: '0 0 8px rgba(0,229,255,0.5)',
+              boxShadow: '0 0 8px rgba(230,232,236,0.5)',
             }} />
           </div>
         </div>
@@ -562,6 +633,8 @@ function App() {
 {
   showDashboard && (
     <div className="dashboard-container fade-enter" style={{ paddingTop: '96px', paddingBottom: '36px' }}>
+      {activeView === 'about' ? <AboutView /> : (
+      <>
       {showScenarioPicker && (
         <div style={{
           position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(2,3,8,0.75)',
@@ -569,10 +642,10 @@ function App() {
         }}>
           <div style={{
             width: '100%', maxWidth: '640px', background: 'rgba(8,10,18,0.96)',
-            border: '1px solid rgba(0,229,255,0.25)', borderRadius: '6px', padding: '28px 32px',
-            boxShadow: '0 0 60px rgba(0,229,255,0.08), 0 20px 60px rgba(0,0,0,0.6)',
+            border: '1px solid rgba(230,232,236,0.25)', borderRadius: '6px', padding: '28px 32px',
+            boxShadow: '0 0 60px rgba(230,232,236,0.08), 0 20px 60px rgba(0,0,0,0.6)',
           }}>
-            <div style={{ fontSize: '10px', letterSpacing: '0.3em', color: '#00E5FF', textTransform: 'uppercase', fontWeight: 'bold', marginBottom: '4px' }}>
+            <div style={{ fontSize: '10px', letterSpacing: '0.3em', color: '#EDEEF2', textTransform: 'uppercase', fontWeight: 'bold', marginBottom: '4px' }}>
               INJECT FAULT SCENARIO
             </div>
             <div className="text-muted" style={{ fontSize: '11px', marginBottom: '20px' }}>
@@ -581,16 +654,18 @@ function App() {
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '22px' }}>
               {Object.values(FAULT_SCENARIOS).map(s => (
-                <div key={s.key} onClick={() => setPendingScenario(s.key)} style={{
-                  border: pendingScenario === s.key ? '1px solid #00E5FF' : '1px solid #1f2833',
-                  background: pendingScenario === s.key ? 'rgba(0,229,255,0.1)' : 'rgba(255,255,255,0.02)',
-                  borderRadius: '4px', padding: '12px 10px', cursor: 'pointer', transition: 'all 0.15s ease',
-                }}>
-                  <div style={{ fontSize: '11px', fontWeight: 'bold', color: pendingScenario === s.key ? '#00E5FF' : '#ccc', marginBottom: '4px' }}>
-                    {s.label}
+                <BorderGlow key={s.key} borderRadius={4} glowRadius={18} fillOpacity={pendingScenario === s.key ? 0.4 : 0.15}
+                  backgroundColor={pendingScenario === s.key ? 'rgba(230,232,236,0.1)' : 'rgba(255,255,255,0.02)'}>
+                  <div onClick={() => setPendingScenario(s.key)} style={{
+                    border: pendingScenario === s.key ? '1px solid #EDEEF2' : '1px solid transparent',
+                    borderRadius: '4px', padding: '12px 10px', cursor: 'pointer', transition: 'all 0.15s ease',
+                  }}>
+                    <div style={{ fontSize: '11px', fontWeight: 'bold', color: pendingScenario === s.key ? '#EDEEF2' : '#ccc', marginBottom: '4px' }}>
+                      {s.label}
+                    </div>
+                    <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.4)', lineHeight: 1.5 }}>{s.summary}</div>
                   </div>
-                  <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.4)', lineHeight: 1.5 }}>{s.summary}</div>
-                </div>
+                </BorderGlow>
               ))}
             </div>
 
@@ -604,7 +679,7 @@ function App() {
               <input
                 type="range" min="0.3" max="1.0" step="0.05" value={pendingSeverity}
                 onChange={e => setPendingSeverity(parseFloat(e.target.value))}
-                style={{ width: '100%', accentColor: '#00E5FF' }}
+                style={{ width: '100%', accentColor: '#EDEEF2' }}
               />
             </div>
 
@@ -631,8 +706,8 @@ function App() {
               <span>TELEMETRY STREAM</span>
               {isAnomaly && (
                 <button onClick={() => setShowDiff(v => !v)} style={{
-                  background: showDiff ? 'rgba(0,229,255,0.15)' : 'transparent',
-                  border: '1px solid rgba(0,229,255,0.4)', color: '#00E5FF',
+                  background: showDiff ? 'rgba(230,232,236,0.15)' : 'transparent',
+                  border: '1px solid rgba(230,232,236,0.4)', color: '#EDEEF2',
                   fontSize: '9px', padding: '2px 8px', letterSpacing: '0.05em',
                   textTransform: 'uppercase', cursor: 'pointer', fontFamily: 'inherit', borderRadius: '3px',
                 }}>
@@ -677,53 +752,50 @@ function App() {
           </div>
 
           <div className="panel">
-            <div className="panel-title">AGENT: SENTINEL (ANOMALY DETECT)</div>
-            <div style={{
-              padding: '8px', border: isAnomaly ? '1px solid #ff3b3b' : '1px solid #1f2833',
-              textAlign: 'center', fontWeight: 'bold', fontSize: '12px',
-            }} className={isAnomaly ? 'text-red' : 'text-green'}>
-              {isAnomaly ? '⚠ ANOMALY DETECTED' : '✓ SYSTEM NOMINAL'}
-            </div>
-            <button onClick={openScenarioPicker} style={{
-              width: '100%', padding: '8px', marginTop: '10px', background: '#1f2833',
-              color: isAnomaly ? '#ff6b6b' : '#00E5FF',
-              border: `1px solid ${isAnomaly ? '#ff3b3b' : 'rgba(0, 229, 255, 0.45)'}`,
-              cursor: 'pointer', fontFamily: 'inherit', textTransform: 'uppercase', fontSize: '11px',
-            }}>
-              {isAnomaly ? 'Reset System' : 'Trigger Fault Scenario'}
-            </button>
+            <BorderGlow borderRadius={6} glowRadius={16} fillOpacity={0.15}
+              backgroundColor={isAnomaly ? 'rgba(255,59,59,0.05)' : 'rgba(255,255,255,0.02)'}>
+              <div style={{
+                padding: '10px', textAlign: 'center', fontWeight: 'bold', fontSize: '12px',
+              }} className={isAnomaly ? 'text-red' : 'text-green'}>
+                {isAnomaly ? '⚠ ANOMALY DETECTED' : '✓ SYSTEM NOMINAL'}
+              </div>
+            </BorderGlow>
+            <BorderGlow borderRadius={6} glowRadius={16} fillOpacity={0.25} className="trigger-btn-glow">
+              <button onClick={openScenarioPicker} className={`shiny-btn ${isAnomaly ? 'shiny-btn--danger' : ''}`}>
+                {isAnomaly ? 'Reset System' : 'Inject Anomaly'}
+              </button>
+            </BorderGlow>
           </div>
 
           <div className="panel flex-1">
-            <div className="panel-title">AGENT: CHRONICLE (EVENT LOG)</div>
-            <div className="terminal-logs">
-              {logs.map((log, i) => (
-                <p key={i} style={{ margin: '3px 0' }} className={log.includes('WARN') || log.includes('⚠') ? 'text-red' : ''}>
-                  {log}
-                </p>
-              ))}
-              {scenarioPhase === 'executing' && <p className="dot-blink">&gt; Working...</p>}
-            </div>
-          </div>
-
-          <div className="panel" style={{ height: '90px' }}>
-            <div className="panel-title" style={{ marginBottom: '5px' }}>SYSTEM VITALS EKG</div>
-            <div style={{ overflow: 'hidden', background: '#050505', border: '1px solid #1f2833', height: '58px' }}>
-              <svg className={isAnomaly ? 'ekg-erratic' : 'ekg-normal'} viewBox="0 0 500 100" preserveAspectRatio="none" style={{ width: '100%', height: '100%', display: 'block' }}>
-                <polyline
-                  fill="none"
-                  stroke={isAnomaly ? '#ff3b3b' : '#52ff52'}
-                  strokeWidth="2.5"
-                  vectorEffect="non-scaling-stroke"
-                  points={isAnomaly
-                    ? "0,50 10,20 20,80 30,10 40,90 50,30 60,70 70,40 80,60 90,15 100,80 110,20 120,90 130,10 140,85 150,30 160,70 170,25 180,80 190,10 200,90 210,40 220,60 230,15 240,80 250,20 260,90 270,10 280,85 290,30 300,70 310,25 320,80 330,10 340,90 350,40 360,60 370,15 380,80 390,20 400,90 410,10 420,85 430,30 440,70 450,25 460,80 470,10 480,90 490,40 500,50"
-                    : "0,50 80,50 85,45 90,50 100,50 105,60 110,15 115,80 120,50 140,50 150,45 160,50 330,50 335,45 340,50 350,50 355,60 360,15 365,80 370,50 390,50 400,45 410,50 580,50"}
-                />
-              </svg>
-            </div>
+            <AgentNav
+              agents={AGENT_ROSTER}
+              activeAgent={activeAgentPage}
+              onSelect={code => setActiveAgentPage(code)}
+            />
           </div>
         </div>
 
+        {activeAgentPage ? (
+          <AgentDetailPage
+            agent={activeAgentPage}
+            activeScenario={activeScenario}
+            activeSeverity={activeSeverity}
+            isAnomaly={isAnomaly}
+            scenarioPhase={scenarioPhase}
+            guardianTier={guardianTier}
+            guardianApproved={guardianApproved}
+            handleApprove={handleApprove}
+            selectedMitigation={selectedMitigation}
+            setSelectedMitigation={setSelectedMitigation}
+            executeRunbook={executeRunbook}
+            logs={logs}
+            liveTelemetry={liveTelemetry}
+            BASELINE_TELEMETRY={BASELINE_TELEMETRY}
+            TELEMETRY_ROWS={TELEMETRY_ROWS}
+          />
+        ) : (
+        <>
         {/* ── CENTER ── */}
         <div className="center-layout">
           <div className="center-view">
@@ -842,11 +914,11 @@ function App() {
               <div>
                 <div style={{ fontSize: '11px', marginBottom: '8px', color: '#888' }}>Recommended Recovery Options:</div>
                 <div onClick={() => scenarioPhase !== 'executing' && setSelectedMitigation(1)}
-                  style={{ border: selectedMitigation === 1 ? '1px solid #00E5FF' : '1px solid rgba(0, 229, 255, 0.45)', padding: '8px', fontSize: '11px', marginBottom: '5px', background: selectedMitigation === 1 ? 'rgba(0,229,255,0.15)' : 'rgba(0,229,255,0.06)', cursor: 'pointer' }}>
+                  style={{ border: selectedMitigation === 1 ? '1px solid #EDEEF2' : '1px solid rgba(230, 232, 236, 0.45)', padding: '8px', fontSize: '11px', marginBottom: '5px', background: selectedMitigation === 1 ? 'rgba(230,232,236,0.15)' : 'rgba(230,232,236,0.06)', cursor: 'pointer' }}>
                   1. Throttle {activeScenario?.subsystem} to Safe Limits (Safe: 98%)
                 </div>
                 <div onClick={() => scenarioPhase !== 'executing' && setSelectedMitigation(2)}
-                  style={{ border: selectedMitigation === 2 ? '1px solid #00E5FF' : '1px solid #333', padding: '8px', fontSize: '11px', color: selectedMitigation === 2 ? '#fff' : '#777', background: selectedMitigation === 2 ? 'rgba(0,229,255,0.15)' : 'transparent', cursor: 'pointer' }}>
+                  style={{ border: selectedMitigation === 2 ? '1px solid #EDEEF2' : '1px solid #333', padding: '8px', fontSize: '11px', color: selectedMitigation === 2 ? '#fff' : '#777', background: selectedMitigation === 2 ? 'rgba(230,232,236,0.15)' : 'transparent', cursor: 'pointer' }}>
                   2. Emergency Shutoff (Loss risk: 15%)
                 </div>
               </div>
@@ -865,7 +937,11 @@ function App() {
             <SystemMeter label="SENS" />
           </div>
         </div>
+        </>
+        )}
       </div>
+      </>
+      )}
 
       {/* Footer */}
       <div style={{
@@ -877,7 +953,7 @@ function App() {
       }}>
         <span>ISRO NETRA FEED: <span style={{ color: '#00FF88' }}>● LIVE</span></span>
         <div style={{ display: 'flex', gap: '20px' }}><SystemMeter label="CPU" /><SystemMeter label="NET" /></div>
-        <span>AERO‑ASTRA MISSION OPS v2.5 <span style={{ color: '#00E5FF' }}>✓ NOMINAL</span></span>
+        <span>AERO‑ASTRA MISSION OPS v2.5 <span style={{ color: '#EDEEF2' }}>✓ NOMINAL</span></span>
       </div>
     </div>
   )
