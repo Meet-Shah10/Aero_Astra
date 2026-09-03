@@ -210,6 +210,68 @@ Triggers auto-download of `.txt` runbook file.
 
 6. **Z3 formal verification (bonus)** — "We mathematically proved this recovery action can never drop battery below survival threshold." Even non-technical judges feel the weight of this.
 
+7. **Scenario Picker** — Judges choose which fault to inject (4 options with severity sliders). Interactive = impressive.
+
+8. **Agent Timeline Strip** — Horizontal bar showing SENTINEL → SHERLOCK → ORACLE → ATHENA → GUARDIAN → SCRIBE, each lighting up as it completes. Judges see the pipeline working in real time.
+
+---
+
+## NEW: Scenario Picker UI (Phase 1 Frontend)
+
+Replace the single "Trigger Anomaly" button with a modal showing 4 scenario cards:
+
+| Scenario | Fault Key | Default Severity | Visual |
+|---|---|---|---|
+| 🔋 Battery Degradation | `eps_battery_degradation` | 0.7 | SOC drops gradually |
+| 🌡️ Thermal Runaway | `tcs_thermal_runaway` | 0.7 | Temp climbs unbounded |
+| ⚡ Cascading Power Failure | `eps_cascade_power_failure` | 0.9 (fixed) | All 5 subsystems degrade |
+| 🔄 Reaction Wheel Failure | `adcs_reaction_wheel_degradation` | 0.6 | Attitude error grows |
+
+Each card sends `POST /trigger` with `{ fault: "<key>", severity: <value> }`.
+
+---
+
+## NEW: Digital Twin Emphasis (Throughout)
+
+- Label the physics simulator section in the UI as **"DIGITAL TWIN ENGINE"**
+- Show a visible badge: "Physics-Based Digital Twin | 6 Subsystems | 18 Causal Edges"
+- During Monte Carlo, show count-up: "Simulating 87/100 futures..."
+- In ORACLE results panel: "Digital Twin Prediction Results"
+
+---
+
+## NEW: Split-Screen View (Phase 3)
+
+When ORACLE runs, show left = current state bars, right = predicted future state bars.
+The "Do Nothing" baseline on the right shows what happens without intervention.
+
+---
+
+## NEW: API Response Caching (Phase 1)
+
+Cache one full SHERLOCK response for `eps_battery_degradation` as JSON fallback.
+If OpenRouter API is slow/down during demo, serve cached response with `[CACHED]` label.
+**This is your safety net. Do not skip this.**
+
+---
+
+## NEW: Real Satellite Fault Physics Rules
+
+These are real engineering thresholds that make our simulator credible:
+
+| Parameter | Warning | Critical | Mission Loss |
+|---|---|---|---|
+| Battery SOC | < 50% | < 25% | < 15% |
+| Bus Voltage (28V bus) | < 25V | < 22V | < 18V |
+| Panel Temperature | > 55°C or < -10°C | > 80°C or < -20°C | > 100°C |
+| Battery Temperature | > 35°C | > 40°C | > 45°C (thermal runaway risk) |
+| Attitude Error | > 5° | > 15° | > 30° (tumble) |
+| Reaction Wheel Speed | > 5000 RPM | > 6000 RPM (saturation) | Wheel failure |
+| Signal Strength | < -95 dBm | < -105 dBm | < -115 dBm (loss of lock) |
+| CPU Load | > 70% | > 90% | Watchdog trip |
+
+**ORACLE must always include a "Do Nothing" baseline** — this shows judges what happens without intervention.
+
 ---
 
 ## Cut Priority (If Time Runs Out)
