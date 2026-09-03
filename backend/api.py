@@ -206,7 +206,7 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
             log.error(f"ATHENA failed: {e}")
 
     for frame in sim.frames:
-        await asyncio.sleep(0.05) # simulate realtime
+        await asyncio.sleep(1.0) # stream one simulation frame per second
         
         # Format Telemetry for Frontend
         telemetry_msg = {

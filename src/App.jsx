@@ -27,7 +27,7 @@ const AGENT_ROSTER = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Fault scenario catalog — the 3 faults verified to produce a real, visible
+//  Fault scenario catalog — faults verified to produce a real, visible
 //  signal within a demo-length simulator run (see audit_findings.md §3).
 //  `baseline` / `live` share keys so this doubles as the exact shape the
 //  WebSocket `telemetry` message will fill in once backend/api.py exists
@@ -35,6 +35,26 @@ const AGENT_ROSTER = [
 //  matter of replacing these objects with WS payloads, not restructuring UI.
 // ─────────────────────────────────────────────────────────────────────────────
 const FAULT_SCENARIOS = {
+  eps_battery_degradation: {
+    key: 'eps_battery_degradation',
+    faultId: 'eps_battery_degradation',
+    label: 'EPS Battery Degradation',
+    subsystem: 'EPS',
+    summary: 'Battery capacity and bus voltage decline gradually under load.',
+    rootCause: 'Battery Cell Degradation (EPS)',
+    causalChain: ['EPS', 'TCS', 'ADCS'],
+    liveOverride: { epsLoad: 'DEGRADING', cpuUsage: 'RISING' },
+  },
+  eps_cascade_power_failure: {
+    key: 'eps_cascade_power_failure',
+    faultId: 'eps_cascade_power_failure',
+    label: 'EPS Cascade Power Failure',
+    subsystem: 'EPS',
+    summary: 'Solar array loss drains the battery and starves downstream systems.',
+    rootCause: 'Solar Array Power Loss (EPS)',
+    causalChain: ['EPS', 'TCS', 'ADCS'],
+    liveOverride: { epsLoad: 'CRITICAL', cpuUsage: 'SHUTDOWN' },
+  },
   thermal_runaway: {
     key: 'thermal_runaway',
     faultId: 'tcs_thermal_runaway',
@@ -238,7 +258,7 @@ function App() {
 
   // Scenario picker + comparison panel state
   const [showScenarioPicker, setShowScenarioPicker] = useState(false);
-  const [pendingScenario, setPendingScenario] = useState('thermal_runaway');
+  const [pendingScenario, setPendingScenario] = useState('eps_battery_degradation');
   const [pendingSeverity, setPendingSeverity] = useState(0.7);
   const [activeScenario, setActiveScenario] = useState(null);
   const [activeSeverity, setActiveSeverity] = useState(null);
@@ -890,9 +910,14 @@ function App() {
           <div className="panel">
             <div className="panel-title">AGENT: VITALS (PROACTIVE)</div>
             <div className="data-row"><span>System Health</span><span className={vitals.system_health < 0.8 ? 'text-red' : 'text-green'}>{(vitals.system_health * 100).toFixed(1)}%</span></div>
-            <div className="data-row"><span>EPS Health</span><span>{(vitals.eps_health * 100).toFixed(1)}%</span></div>
-            <div className="data-row"><span>TCS Health</span><span>{(vitals.tcs_health * 100).toFixed(1)}%</span></div>
-            <div className="data-row"><span>ADCS Health</span><span className="text-cyan">{(vitals.adcs_health * 100).toFixed(1)}%</span></div>
+            {[['EPS', vitals.eps_health], ['TCS', vitals.tcs_health], ['ADCS', vitals.adcs_health]].map(([label, score]) => (
+              <div className="vitals-bar-row" key={label}>
+                <div className="data-row"><span>{label} Health</span><span>{(score * 100).toFixed(1)}%</span></div>
+                <div className="vitals-bar-track" role="progressbar" aria-label={`${label} health`} aria-valuenow={score * 100} aria-valuemin="0" aria-valuemax="100">
+                  <div className={`vitals-bar-fill vitals-bar-fill--${label.toLowerCase()}`} style={{ width: `${score * 100}%` }} />
+                </div>
+              </div>
+            ))}
             {vitals.system_health < 0.6 && (
               <div style={{ color: '#ff3b3b', fontSize: '11px', marginTop: '8px', border: '1px dashed #ff3b3b', padding: '6px' }}>
                 ⚠ WARNING: CRITICAL DEGRADATION DETECTED

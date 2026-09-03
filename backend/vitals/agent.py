@@ -14,6 +14,11 @@ def calculate_vitals(state) -> dict:
         eps_score -= (28.0 - vbus) * 0.1
     elif vbus > 32.0:
         eps_score -= (vbus - 32.0) * 0.1
+
+    if state.active_fault == "eps_battery_degradation":
+        eps_score -= 0.4 * state.fault_severity
+    elif state.active_fault == "eps_cascade_power_failure":
+        eps_score -= state.fault_severity
         
     eps_score = max(0.0, min(1.0, eps_score))
     
@@ -31,6 +36,9 @@ def calculate_vitals(state) -> dict:
         tcs_score -= (p_temp - 85.0) * 0.01
     elif p_temp < -40.0:
         tcs_score -= (-40.0 - p_temp) * 0.01
+
+    if state.active_fault == "eps_cascade_power_failure":
+        tcs_score -= 0.5 * state.fault_severity
         
     tcs_score = max(0.0, min(1.0, tcs_score))
     
