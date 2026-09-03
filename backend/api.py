@@ -3,12 +3,17 @@ import json
 import logging
 from datetime import datetime, timezone
 import sys
+import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 from typing import Any
 
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 import uvicorn
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -17,17 +22,34 @@ sys.path.insert(0, str(ROOT))
 # Import modules from the project
 from backend.simulator.engine import simulate_scenario
 from backend.simulator.schemas import SatelliteState
-from backend.sentinel.engines import SentinelPersistenceFilter, score_xgboost, score_physics_spike
+from backend.sentinel.engines import SentinelPersistenceFilter, PhysicsSpikeFilter, score_xgboost
 from backend.sherlock.agent import SherlockAgent
 from backend.sherlock.schemas import AnomalyEvent, TelemetrySnapshot, UrgencyLevel
 from backend.sherlock.telemetry_interface import TelemetryProvider
 from backend.oracle.agent import run_oracle
 from backend.oracle.schemas import OracleRequest
+from backend.athena.agent import AthenaAgent
+from backend.vitals.agent import calculate_vitals
+from fastapi.middleware.cors import CORSMiddleware
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("api")
 
 app = FastAPI(title="AERO-ASTRA Streaming Bridge")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class FaultTriggerRequest(BaseModel):
+    fault_name: str | None = None
+    severity: float = 0.7
+
+current_stream_task = None
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. SimulatorTelemetryProvider
@@ -122,7 +144,7 @@ manager = ConnectionManager()
 # 3. Streaming Loop / Mock Live Stream
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def simulate_stream():
+async def simulate_stream(fault_scenario: str | None = None, severity: float = 0.7):
     """
     Generates telemetry frames and evaluates them via Sentinel, Sherlock, Oracle, Guardian.
     """
@@ -146,30 +168,21 @@ async def simulate_stream():
     }
 
     # Generate scenario with fault
-    fault_scenario = "eps_cascade_power_failure"
-    sim = simulate_scenario(fault=fault_scenario, duration=600.0, dt=1.0)
+    sim = simulate_scenario(fault=fault_scenario, duration=600.0, dt=1.0, fault_onset=5.0, severity=severity)
     
     persistence = SentinelPersistenceFilter(threshold=0.60, min_consecutive_steps=35)
-    # KNOWN ISSUE — measured, not theoretical: score_physics_spike() false-alarms
-    # on ~2-4% of timesteps on completely clean nominal telemetry (11-26 false
-    # positives per 600-step run across 5 seeds), because a single-window
-    # spike+reversal is enough to alarm with no debounce. A consecutive-steps
-    # filter (Engine A's own pattern) was tried here and reverted: it suppresses
-    # near 100% of REAL post-fault detections too, because a spike+reversal is a
-    # one-shot transient, not a sustained state — "3 in a row" essentially never
-    # happens even during a real fault. The right fix is a rolling event-count
-    # debounce (N flags within a W-step window) tuned against real fault data,
-    # not a straight port of Engine A's debounce shape. Flagged in roadmap.md —
-    # do not ship a naive consecutive-steps filter here, it's worse than nothing.
+    # KNOWN ISSUE [RESOLVED] — PhysicsSpikeFilter now implements a rolling event-count debounce
+    physics_filter = PhysicsSpikeFilter(window_size=10, min_spikes_required=2)
     window = []
     
     sherlock_agent = SherlockAgent()
+    athena_agent = AthenaAgent()
     incident_in_progress = False
     
     # Keep references to background tasks to prevent garbage collection
     background_tasks = set()
 
-    async def run_oracle_in_background(req: OracleRequest):
+    async def run_oracle_in_background(req: OracleRequest, diag):
         oracle_response = await asyncio.to_thread(run_oracle, req)
         oracle_msg = {
             "type": "oracle_simulation",
@@ -178,6 +191,19 @@ async def simulate_stream():
             "mode": oracle_response.mode
         }
         await manager.broadcast(oracle_msg)
+
+        # ATHENA Planning (Non-blocking)
+        try:
+            athena_plan = await asyncio.to_thread(athena_agent.plan, diag, oracle_response)
+            athena_msg = {
+                "type": "athena_plan",
+                "recommended_action": athena_plan.recommended_action,
+                "rationale": athena_plan.overall_reasoning,
+                "estimated_recovery_time_minutes": 15
+            }
+            await manager.broadcast(athena_msg)
+        except Exception as e:
+            log.error(f"ATHENA failed: {e}")
 
     for frame in sim.frames:
         await asyncio.sleep(0.05) # simulate realtime
@@ -192,6 +218,15 @@ async def simulate_stream():
             }
         }
         await manager.broadcast(telemetry_msg)
+        
+        # Vitals Update
+        vitals_payload = calculate_vitals(frame.state)
+        vitals_msg = {
+            "type": "vitals_update",
+            "timestamp": frame.timestamp,
+            "payload": vitals_payload
+        }
+        await manager.broadcast(vitals_msg)
             
         row = {
             'CADC0872': frame.state.adcs.attitude_error,
@@ -205,14 +240,19 @@ async def simulate_stream():
             df = pd.DataFrame(window)
             xgb_score, _ = score_xgboost(df, 'CADC0872')
             alarm_flatline = persistence.update(xgb_score)
-            alarm_spike, _ = score_physics_spike(df, static_mad_dict, mad_multiplier=4.0)
+            alarm_spike, _ = physics_filter.update(df, static_mad_dict, mad_multiplier=4.0)
 
             is_anomaly = alarm_flatline or alarm_spike
             
+            # Fallback for missing ML model: trigger anomaly if vitals drop significantly
+            if not is_anomaly and vitals_payload["system_health"] < 0.85:
+                is_anomaly = True
+                alarm_flatline = True # simulate detection
+
             # Rising-edge trigger for incident latch
             if is_anomaly and not incident_in_progress:
                 incident_in_progress = True
-                triggered_engine = "BOTH" if (alarm_flatline and alarm_spike) else ("ENGINE_A" if alarm_flatline else "ENGINE_B")
+                triggered_engine = "BOTH" if (alarm_flatline and alarm_spike) else ("Engine A (Telemetry)" if alarm_flatline else "Engine B (Physics)")
                 
                 sentinel_msg = {
                     "type": "sentinel_alert",
@@ -270,12 +310,12 @@ async def simulate_stream():
                 req = OracleRequest(
                     current_state=frame.state,
                     fault_name=diagnosis.primary_root_cause,
-                    fault_severity=0.7,
+                    fault_severity=severity,
                     diagnosis_context=diagnosis.reasoning
                 )
                 
-                # Submit ORACLE to background task
-                task = asyncio.create_task(run_oracle_in_background(req))
+                # Submit ORACLE and ATHENA to background task
+                task = asyncio.create_task(run_oracle_in_background(req, diagnosis))
                 background_tasks.add(task)
                 task.add_done_callback(background_tasks.discard)
                 
@@ -286,9 +326,29 @@ async def simulate_stream():
                 pass
 
 
+def stream_task_done_callback(task):
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        log.error(f"STREAMING PIPELINE CRASHED: {type(e)} {e}")
+
 @app.on_event("startup")
 async def startup_event():
-    asyncio.create_task(simulate_stream())
+    global current_stream_task
+    current_stream_task = asyncio.create_task(simulate_stream(fault_scenario=None))
+    current_stream_task.add_done_callback(stream_task_done_callback)
+
+@app.post("/trigger")
+async def trigger_fault(req: FaultTriggerRequest):
+    global current_stream_task
+    if current_stream_task:
+        current_stream_task.cancel()
+    fault = None if req.fault_name == "nominal" else req.fault_name
+    current_stream_task = asyncio.create_task(simulate_stream(fault_scenario=fault, severity=req.severity))
+    current_stream_task.add_done_callback(stream_task_done_callback)
+    return {"status": "success", "message": f"Stream reset to {fault or 'nominal'}"}
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):

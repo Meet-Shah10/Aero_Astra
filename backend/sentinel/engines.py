@@ -3,6 +3,7 @@ import pandas as pd
 from pathlib import Path
 import joblib
 import logging
+from collections import deque
 
 from .utils import extract_rolling_features
 
@@ -141,6 +142,31 @@ def score_physics_spike(current_window_df, static_mad_dict, mad_multiplier=4.0):
     return False, None
 
 
+class PhysicsSpikeFilter:
+    def __init__(self, window_size=10, min_spikes_required=2):
+        self.window_size = window_size
+        self.min_spikes_required = min_spikes_required
+        self.spike_history = deque()
+        self.current_step = 0
+        
+    def reset(self):
+        self.spike_history.clear()
+        self.current_step = 0
+        
+    def update(self, current_window_df, static_mad_dict, mad_multiplier=4.0):
+        self.current_step += 1
+        
+        is_spike, method = score_physics_spike(current_window_df, static_mad_dict, mad_multiplier)
+        
+        if is_spike:
+            self.spike_history.append(self.current_step)
+            
+        while self.spike_history and self.spike_history[0] <= self.current_step - self.window_size:
+            self.spike_history.popleft()
+            
+        alarm = len(self.spike_history) >= self.min_spikes_required
+        return alarm, method if alarm else None
+
 # -----------------------------------------------------------------------------
 # ENGINE C: Correlation Shift Detector (DORMANT)
 # -----------------------------------------------------------------------------
@@ -150,7 +176,7 @@ def score_physics_spike(current_window_df, static_mad_dict, mad_multiplier=4.0):
 # -----------------------------------------------------------------------------
 # COMBINED PIPELINE
 # -----------------------------------------------------------------------------
-def score_telemetry_window(channel, current_window_df, persistence_filter, static_mad_dict, mad_multiplier):
+def score_telemetry_window(channel, current_window_df, persistence_filter, physics_filter, static_mad_dict, mad_multiplier):
     """
     Hybrid anomaly detector combining XGBoost (Engine A) and Spike/Boundary (Engine B).
     """
@@ -159,7 +185,7 @@ def score_telemetry_window(channel, current_window_df, persistence_filter, stati
     alarm_flatline = persistence_filter.update(xgb_score)
     
     # 2. Engine B (Physics Spike + Triad Isolation)
-    alarm_spike, spike_method = score_physics_spike(
+    alarm_spike, spike_method = physics_filter.update(
         current_window_df, static_mad_dict, mad_multiplier
     )
     

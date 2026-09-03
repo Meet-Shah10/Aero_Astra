@@ -244,6 +244,47 @@ function App() {
   const [activeSeverity, setActiveSeverity] = useState(null);
   const [guardianTier, setGuardianTier] = useState(null); // 'AUTOMATED_GUARDED' | 'MANUAL_INTERLOCK'
   const [showDiff, setShowDiff] = useState(false);
+  const [liveTelemetry, setLiveTelemetry] = useState(BASELINE_TELEMETRY);
+  const [vitals, setVitals] = useState({ eps_health: 1.0, tcs_health: 1.0, adcs_health: 1.0, system_health: 1.0 });
+
+  useEffect(() => {
+    const ws = new WebSocket("ws://localhost:8000/ws");
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.type === 'telemetry') {
+         setLiveTelemetry(prev => ({
+           ...prev,
+           epsLoad: `${data.subsystems.EPS.battery_soc.toFixed(1)}%`,
+           cpuUsage: `${Math.max(0, (28.1 - data.subsystems.EPS.bus_voltage) * 10).toFixed(1)}%`,
+           tcsTemp: `${data.subsystems.ADCS.reaction_wheel_speed.toFixed(0)} RPM`,
+           altitude: '540 km | 7.5 km/s',
+           commLink: 'Stable',
+         }));
+      } else if (data.type === 'sentinel_alert') {
+         setScenarioPhase('detected');
+         setLogs(prev => [...prev, `> ⚠ WARN: Anomaly detected by ${data.triggered_engine}.`, `> SENTINEL: Correlation threshold exceeded.`]);
+      } else if (data.type === 'sherlock_diagnosis') {
+         setScenarioPhase('diagnosing');
+         setLogs(prev => [...prev, `> SHERLOCK: Building causal dependency graph...`, `> SHERLOCK: Root cause isolated → ${data.primary_root_cause}.`]);
+         setActiveScenario(prev => prev ? { ...prev, rootCause: data.primary_root_cause, causalChain: data.causal_chain || [data.primary_root_cause] } : null);
+         setTimeout(() => setScenarioPhase('planning'), 2000);
+      } else if (data.type === 'oracle_simulation') {
+         setLogs(prev => [...prev, `> ORACLE: Simulated mitigation options. Best action: ${data.best_action} (Safety: ${data.top_score.toFixed(2)})`]);
+      } else if (data.type === 'vitals_update') {
+         setVitals(data.payload);
+      } else if (data.type === 'guardian_action') {
+         setScenarioPhase('awaiting_approval');
+         setGuardianTier(data.status);
+         if (data.status === 'AUTOMATED_GUARDED' || data.status === 'AUTONOMOUS_SAFED') {
+             setGuardianApproved(true);
+             setLogs(prev => [...prev, `> GUARDIAN: ${data.status}. Executing without human approval.`]);
+         } else {
+             setLogs(prev => [...prev, '> GUARDIAN: HIGH severity → MANUAL_INTERLOCK. Safety gate locked, awaiting human approval.']);
+         }
+      }
+    };
+    return () => ws.close();
+  }, []);
 
   const loadMessages = [
     '> BOOT: AERO-ASTRA MISSION CONTROL v2.5',
@@ -256,24 +297,18 @@ function App() {
   ];
 
   // ── Launch sequence (exactly like orbital-tomb) ──
-  // 1. Set launched=true → Scene3D camera starts dollying in
-  // 2. After 800ms show the loader panel
-  // 3. After 3000ms total → show dashboard
   const handleLaunch = () => {
     playBeep();
     setLaunched(true);
 
-    // After camera starts moving, show loading overlay
     setTimeout(() => {
       setShowLoader(true);
       setLoadStep(0);
-      // Stagger load messages
       loadMessages.forEach((_, i) => {
         setTimeout(() => setLoadStep(i + 1), i * 260);
       });
     }, 800);
 
-    // Transition to dashboard
     setTimeout(() => {
       setShowDashboard(true);
       setMissionStart(Date.now());
@@ -289,7 +324,14 @@ function App() {
     setActiveSeverity(null);
     setGuardianTier(null);
     setShowDiff(false);
+    setVitals({ eps_health: 1.0, tcs_health: 1.0, adcs_health: 1.0, system_health: 1.0 });
     setLogs(['> System reset.', '> Telemetry linked on band S7.', '> SENTINEL: Monitoring 5 active assets.']);
+    
+    fetch('http://localhost:8000/trigger', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fault_name: 'nominal', severity: 0.0 })
+    }).catch(err => setLogs(prev => [...prev, `> ERROR: Backend unreachable: ${err.message}`]));
   };
 
   const openScenarioPicker = () => {
@@ -300,48 +342,22 @@ function App() {
     setShowScenarioPicker(true);
   };
 
-  // Launches the chosen scenario. Severity decides which of GUARDIAN's two
-  // real outcomes plays out — see roadmap.md's MVP section: same 3 verified
-  // faults, same pipeline, branching only on how dangerous the situation is.
   const launchScenario = () => {
     const scenario = FAULT_SCENARIOS[pendingScenario];
     const severity = pendingSeverity;
-    const isHighRisk = severity >= HIGH_RISK_SEVERITY_THRESHOLD;
 
     setShowScenarioPicker(false);
     setActiveScenario(scenario);
     setActiveSeverity(severity);
     setShowDiff(false);
-    setScenarioPhase('detected');
-    setLogs(prev => [...prev,
-      `> ⚠ WARN: Anomaly detected at ${scenario.subsystem}.`,
-      `> SENTINEL: Correlation threshold exceeded (severity ${severity.toFixed(2)}).`,
-    ]);
+    setScenarioPhase('nominal'); // Will be updated by WS
+    setLogs(prev => [...prev, `> SYSTEM: Injecting fault ${scenario.faultId} at severity ${severity.toFixed(2)}...`]);
 
-    setTimeout(() => {
-      setScenarioPhase('diagnosing');
-      setLogs(prev => [...prev,
-        '> SHERLOCK: Building causal dependency graph...',
-        `> SHERLOCK: Root cause isolated → ${scenario.causalChain.join(' → ')}.`,
-      ]);
-      setTimeout(() => {
-        setScenarioPhase('planning');
-        setLogs(prev => [...prev, '> ATHENA: Generating recovery options.', '> QUARTERMASTER: Sandboxing mitigation options...']);
-        setTimeout(() => {
-          if (isHighRisk) {
-            setGuardianTier('MANUAL_INTERLOCK');
-            setScenarioPhase('awaiting_approval');
-            setLogs(prev => [...prev, '> GUARDIAN: HIGH severity → MANUAL_INTERLOCK. Safety gate locked, awaiting human approval.']);
-          } else {
-            setGuardianTier('AUTOMATED_GUARDED');
-            setGuardianApproved(true);
-            setLogs(prev => [...prev, '> GUARDIAN: Low severity → AUTOMATED_GUARDED. Executing without waiting for approval.']);
-            setScenarioPhase('awaiting_approval');
-            setTimeout(() => executeRunbook(scenario), 900);
-          }
-        }, 3000);
-      }, 3000);
-    }, 3000);
+    fetch('http://localhost:8000/trigger', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fault_name: scenario.faultId, severity: severity })
+    }).catch(err => setLogs(prev => [...prev, `> ERROR: Backend unreachable: ${err.message}`]));
   };
 
   const handleApprove = (e) => {
@@ -352,6 +368,7 @@ function App() {
 
   const executeRunbook = (scenarioOverride) => {
     const scenario = scenarioOverride || activeScenario;
+    if (!scenario) return;
     setScenarioPhase('executing');
     setLogs(prev => [...prev,
     `> SCRIBE: Executing Option ${selectedMitigation}.`,
@@ -372,11 +389,6 @@ function App() {
   };
 
   const isAnomaly = scenarioPhase !== 'nominal' && scenarioPhase !== 'resolved';
-
-  // Live telemetry = baseline with the active scenario's field-level
-  // overrides applied. Same shape a real `telemetry` WS message would have
-  // (see backend.md §5) — this is the mock stand-in for that payload.
-  const liveTelemetry = { ...BASELINE_TELEMETRY, ...(isAnomaly ? activeScenario?.liveOverride : null) };
 
   return (
     <div style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden' }}>
@@ -877,13 +889,13 @@ function App() {
         <div className="sidebar right-panel">
           <div className="panel">
             <div className="panel-title">AGENT: VITALS (PROACTIVE)</div>
-            <div className="data-row"><span>Subsystem Health</span><span className={isAnomaly ? 'text-red' : 'text-green'}>{isAnomaly ? 'CRITICAL' : 'OPTIMAL'}</span></div>
-            <div className="data-row"><span>EPS_SOC</span><span>{isAnomaly ? '85.2% (DEGRADING)' : '98.5%'}</span></div>
-            <div className="data-row"><span>TCS_TEMP</span><span>{isAnomaly ? '+4.2°C/hr' : 'Stable'}</span></div>
-            <div className="data-row"><span>Attitude</span><span className="text-cyan">{isAnomaly ? 'DRIFT 0.3°' : 'Nominal'}</span></div>
-            {isAnomaly && (
+            <div className="data-row"><span>System Health</span><span className={vitals.system_health < 0.8 ? 'text-red' : 'text-green'}>{(vitals.system_health * 100).toFixed(1)}%</span></div>
+            <div className="data-row"><span>EPS Health</span><span>{(vitals.eps_health * 100).toFixed(1)}%</span></div>
+            <div className="data-row"><span>TCS Health</span><span>{(vitals.tcs_health * 100).toFixed(1)}%</span></div>
+            <div className="data-row"><span>ADCS Health</span><span className="text-cyan">{(vitals.adcs_health * 100).toFixed(1)}%</span></div>
+            {vitals.system_health < 0.6 && (
               <div style={{ color: '#ff3b3b', fontSize: '11px', marginTop: '8px', border: '1px dashed #ff3b3b', padding: '6px' }}>
-                ⚠ WARNING: RUL ESTIMATE 12 ORBITS
+                ⚠ WARNING: CRITICAL DEGRADATION DETECTED
               </div>
             )}
           </div>
