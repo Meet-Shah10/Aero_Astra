@@ -33,9 +33,19 @@ Thumbs.db
 
 # ── Data, model artifacts & logs (large / regenerable) ───────────────────────
 backend/data/
-backend/models/
 backend/results/
 backend/logs/
+
+# Track production model only; ignore legacy/large experimental artifacts
+backend/models/sentinel_if.joblib
+backend/models/sentinel_if.pkl
+backend/models/sentinel_lstm.pt
+backend/models/sentinel_lstm_scaler.joblib
+backend/models/sentinel_ocsvm.joblib
+backend/models/sentinel_supervised.pkl
+!backend/models/sentinel_production.pkl
+!backend/models/sentinel_scaler.joblib
+!backend/models/sentinel_ensemble.json
 
 # ── Misc scratch files ────────────────────────────────────────────────────────
 patch*.cjs

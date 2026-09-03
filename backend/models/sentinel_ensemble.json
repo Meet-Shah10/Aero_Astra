@@ -1,0 +1,27 @@
+{
+  "weight_if": 1.0,
+  "weight_lstm": 0.0,
+  "threshold": 0.3400000000000001,
+  "feature_columns": [
+    "duration",
+    "len",
+    "mean",
+    "var",
+    "std",
+    "kurtosis",
+    "skew",
+    "n_peaks",
+    "smooth10_n_peaks",
+    "smooth20_n_peaks",
+    "diff_peaks",
+    "diff2_peaks",
+    "diff_var",
+    "diff2_var",
+    "gaps_squared",
+    "len_weighted",
+    "var_div_duration",
+    "var_div_len"
+  ],
+  "true_contamination": 0.19905956112852666,
+  "trained_at": "2026-08-25T10:29:47.585493"
+}

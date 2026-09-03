@@ -18,14 +18,31 @@ MODELS_DIR = ROOT / "models"
 # Cache the loaded XGBoost model
 _xgb_model = None
 
+def _is_lfs_pointer(path: Path) -> bool:
+    """Return True if the file is a Git LFS pointer stub (plain-text, <512 bytes)."""
+    try:
+        if path.stat().st_size > 512:
+            return False
+        header = path.read_bytes()[:40].decode("utf-8", errors="ignore")
+        return header.startswith("version https://git-lfs.github.com")
+    except Exception:
+        return False
+
 def _get_xgb_model():
     global _xgb_model
     if _xgb_model is None:
         model_path = MODELS_DIR / "sentinel_production.pkl"
-        if model_path.exists():
-            _xgb_model = joblib.load(model_path)
+        if not model_path.exists():
+            log.warning(f"XGB model not found at {model_path}. Engine A will return 0. "
+                        "Run: cd backend/sentinel && python train.py")
+        elif _is_lfs_pointer(model_path):
+            raise RuntimeError(
+                f"Model file at {model_path} is a Git LFS pointer stub, not a real model.\n"
+                "To fix: cd backend/sentinel && python train.py\n"
+                "This regenerates sentinel_production.pkl from the raw OPSSAT data."
+            )
         else:
-            log.warning(f"XGB model not found at {model_path}. Engine A will return 0.")
+            _xgb_model = joblib.load(model_path)
     return _xgb_model
 
 def sigmoid_normalize(value, center, scale=1.0):
