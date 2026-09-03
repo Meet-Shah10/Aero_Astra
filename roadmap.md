@@ -2,11 +2,39 @@
 
 > **Ownership split, effective now:** Mohit → 100% frontend (`src/`). Backend (`backend/`) is handed off completely — whoever picks it up should read [`backend.md`](backend.md) instead of this file. This file is the frontend-facing plan and the shared contract both sides build against.
 >
-> **The old framing was "48 hours, build 8 agents."** The new framing: **we have 40 hours, and the thing that actually needs to exist is 2-3 real, working, click-to-trigger demo flows.** Everything else is upside, not requirement. Read the MVP section first — it is the only thing that must exist for this to be a working product. Everything after it is "yes, do this too, we have time" — not a cut list.
+> **Last full verification pass: 2026-09-03.** Everything marked ✅ below was actually run — tests executed, empirical checks against the real simulator, not just read on the page. Everything marked 🟡 is real code that exists but has a known, measured issue. Everything marked ⬜ genuinely doesn't exist yet.
 
 ---
 
-## The MVP: 3 buttons, real data, two branching outcomes
+## 0. Status checklist — tick these off as they land
+
+**Backend agents**
+- [x] SENTINEL — trained model + Engine B physics-threshold detector (see §2, known limitation on 3/6 faults)
+- [x] SHERLOCK — LLM + 18-edge causal graph, untouched and verified identical across all 3 team branches
+- [x] Physics Simulator — `simulate_scenario()` + `run_monte_carlo()`, real orbital dynamics
+- [x] ORACLE — fully wired, 100-run Monte Carlo, fallback ranking mode
+- [x] ATHENA — merged from harsh-lal's branch, 25/25 tests passing, Two-Schema anti-hallucination pattern
+- [x] `backend/api.py` — merged from Meet's `main` branch, real FastAPI + WebSocket bridge (see §3 for what's real vs. still needed)
+- [ ] VITALS — not built
+- [ ] CHRONICLE — not built
+- [ ] GUARDIAN — logic exists *inline inside `api.py`*, not yet its own module (see §3)
+- [ ] QUARTERMASTER — not built
+- [ ] SCRIBE — not built
+
+**Frontend**
+- [x] Full dashboard UI, silver/black palette, PillNav, agent console, 9 agent drill-down pages
+- [x] SHERLOCK causal-graph animation (SVG + GSAP)
+- [x] SENTINEL side-by-side dataset comparison view
+- [ ] Connected to the real `backend/api.py` WebSocket — **still 100% mocked data in `FAULT_SCENARIOS`, this is the #1 remaining blocker**
+
+**Known bugs to fix before demo (see §3 for detail)**
+- [ ] `api.py` hardcodes a single fault (`eps_cascade_power_failure`) at startup — no way for the frontend's scenario picker to actually pick a fault yet
+- [ ] `api.py` doesn't call ATHENA at all — SENTINEL → SHERLOCK → ORACLE → GUARDIAN only
+- [ ] Engine B's spike detector (`score_physics_spike`) has an unsolved false-positive/debounce problem — documented, not silently shipped, see §3
+
+---
+
+## 1. The MVP: 3 buttons, real data, two branching outcomes
 
 This is the whole demo. Get this rock-solid before touching anything else.
 
@@ -14,260 +42,172 @@ This is the whole demo. Get this rock-solid before touching anything else.
 
 | Card | Fault | Why this one | What it proves |
 |---|---|---|---|
-| 🌡️ **Thermal Runaway** | `tcs_thermal_runaway` | Verified: panel_temp climbs 38°C→76°C in ~40 min at default settings — cleanest, most dramatic real signal we have | The FDIR/Safe-Mode story (see below) — this is *literally* the "sudden temperature spike" scenario judges ask about |
+| 🌡️ **Thermal Runaway** | `tcs_thermal_runaway` | Verified: panel_temp climbs 38°C→76°C in ~40 min at default settings — cleanest, most dramatic real signal we have | The FDIR/Safe-Mode story — this is *literally* the "sudden temperature spike" scenario judges ask about |
 | 📡 **Signal Dropout** | `ttc_signal_dropout` | Verified: signal_strength crashes to -114.7 dBm (past mission-loss line) within the demo window | Comms-loss cascade, fast onset (30s ramp) |
 | 🚀 **Thruster Fault** | `propulsion_thruster_fault` | Verified: thruster_temp redlines to 200°C, fastest onset (15s ramp) of any fault | Mechanical/propulsion failure mode, visually distinct from the other two |
 
-**Why only these 3, not all 6 in `faults.py`:** verified by direct testing (see [`audit_findings.md`](audit_findings.md) §3) that `eps_battery_degradation`, `adcs_reaction_wheel_degradation`, and `eps_cascade_power_failure` don't move their telemetry far enough within a demo-length window (severity 0.7, ~1hr) for *any* detector — real ESA-trained model or physics-threshold engine — to fire cleanly. Rather than gamble on a fault that might not visibly trigger live in front of judges, we lead with the 3 that are proven to work every time. (The other 3 aren't gone — see "Later, once the MVP is solid" below. They just need their `faults.py` magnitudes re-tuned first, which is a backend task, not a frontend blocker.)
+**Why only these 3, not all 6 in `faults.py`:** verified by direct testing (see [`audit_findings.md`](audit_findings.md) §3) that `eps_battery_degradation`, `adcs_reaction_wheel_degradation`, and `eps_cascade_power_failure` don't move their telemetry far enough within a demo-length window for *any* detector to fire cleanly. Lead with the 3 that are proven to work every time.
 
-### The severity slider is what creates the second demo path
+### The severity slider creates the second demo path
 
-Each scenario card keeps its severity slider (already speced below under "Scenario Picker UI"). The slider isn't just cosmetic — **it's what decides which of the two GUARDIAN outcomes plays out**, and showing both is the actual differentiator:
+**Path A — "Easy" / low severity → `AUTOMATED_GUARDED`.** SHERLOCK's `urgency` comes back LOW/MEDIUM. GUARDIAN auto-executes, logs it, done. Build/verify this first.
 
-**Path A — "Easy" / low severity → `AUTOMATED_GUARDED`**
-SHERLOCK's `urgency` comes back LOW/MEDIUM. GUARDIAN auto-executes the recovery action with zero human click, logs it, done. This is the fast, boring, "the system just handles it" path. **Build this first** — it's the simplest to wire (no UI interaction state, no approval modal), and it's the one that proves the pipeline is real end-to-end fastest. This is your quick early win.
+**Path B — "High-risk" / high severity → `MANUAL_INTERLOCK`.** SHERLOCK's `urgency` comes back HIGH/CRITICAL. GUARDIAN waits for a human click. The judge-facing moment.
 
-**Path B — "High-risk" / high severity → `MANUAL_INTERLOCK`**
-SHERLOCK's `urgency` comes back HIGH/CRITICAL. GUARDIAN does **not** auto-execute — it surfaces an approval modal and waits for a human click. This is the dramatic, judge-facing moment: *"For high-risk situations, nothing executes without a human. Watch — I have to click approve."* Build this second, once Path A is proven, since it's the same pipeline plus one extra UI state (waiting-for-approval) and one extra backend gate.
-
-**Bonus third tier, if time allows — `AUTONOMOUS_SAFED` (the FDIR answer):**
-If `time_to_critical_estimate_minutes` (already a real field SHERLOCK outputs, see `backend/sherlock/schemas.py:166`) drops below a threshold, GUARDIAN doesn't wait for either of the above — it fires the cheapest safe action (`shed_nonessential_load`) immediately, notifies the operator, and queues the full review for after. This is real spacecraft doctrine (FDIR / Safe Mode — the standard NASA/ESA answer to "what if something goes wrong *right now*"), it directly answers the temperature-spike question, and it reuses data + an action you already have. It's a genuinely small addition once Path A and B exist — a third `if` branch in GUARDIAN's decision function, not a new system. Do it if there's time; the demo works with just A and B.
+**Third tier — `AUTONOMOUS_SAFED` (the FDIR answer) — ✅ already implemented, in `api.py`, not just planned:**
 
 ```python
-# backend/guardian.py — the whole decision, once ORACLE/SHERLOCK exist
-SAFE_MODE_THRESHOLD_MIN = 5
-
-def guardian_decide(diagnosis, oracle_response):
-    if diagnosis.time_to_critical_estimate_minutes < SAFE_MODE_THRESHOLD_MIN:
-        return {"tier": "AUTONOMOUS_SAFED", "auto_executes": True,
-                "requires_human_approval": False, "action": "shed_nonessential_load"}
-    if diagnosis.urgency in ("HIGH", "CRITICAL"):
-        return {"tier": "MANUAL_INTERLOCK", "auto_executes": False,
-                "requires_human_approval": True, "action": oracle_response.best_action}
-    return {"tier": "AUTOMATED_GUARDED", "auto_executes": True,
-            "requires_human_approval": False, "action": oracle_response.best_action}
+# backend/api.py — this exact logic is already live
+ttc = diagnosis.time_to_critical_estimate_minutes
+if ttc is not None and ttc < 5:
+    guardian_status = "AUTONOMOUS_SAFED"
+    action_taken = "shed_nonessential_load"
+elif diagnosis.urgency in (UrgencyLevel.HIGH, UrgencyLevel.CRITICAL):
+    guardian_status = "MANUAL_INTERLOCK"
+else:
+    guardian_status = "AUTOMATED_GUARDED"
 ```
+
+This is a genuinely good sign of team alignment — this is almost exactly the pseudocode this doc sketched before `api.py` existed. It's currently inline in `api.py`'s `simulate_stream()`; pulling it into its own `backend/guardian.py` module is a cheap, worthwhile cleanup (see §4).
 
 ### "Real" beats "impressive" — say this to yourself when a number looks boring
 
-If a telemetry value on screen reads `1.24, 1.24, 1.24, 1.24` for ten ticks in a row because that's genuinely what the physics simulator is outputting right now — **that is a win, not a bug.** It means the number came from a real WebSocket message, not a fake timer. Do not "fix" real-but-boring data by adding jitter or fallback animations. The entire point of Phase 1 (the bridge) is replacing fake numbers with real ones; a real number that happens to be flat is still real. Judges (and you) can tell the difference between "this is animating because it's scripted" and "this is animating because it's physics" — but only if you don't fake the second one to look more like the first.
+If a telemetry value on screen reads `1.24, 1.24, 1.24, 1.24` for ten ticks in a row because that's genuinely what the physics simulator is outputting right now — **that is a win, not a bug.** Do not "fix" real-but-boring data by adding jitter. A real number that happens to be flat is still real.
 
 ---
 
-## What We Have Right Now
+## 2. What We Have Right Now
 
 | Component | Location | Status | Notes |
 |---|---|---|---|
-| **3D Landing + Dashboard UI** | `src/App.jsx` | ✅ Working | Three.js globe, camera dolly, satellite GLB, full agent panels — **but still 100% `setTimeout` fakes, zero WebSocket/fetch calls.** This is the actual current blocker. |
-| **SENTINEL** (XGBoost) | `backend/models/sentinel_production.pkl` | ✅ Working, regenerated | Was a broken git-lfs pointer stub as of 2026-09-03 — retrained from real local OPSSAT data, now a real 1.38MB model, F1 0.65 row-level. Structurally blind to all 6 simulator faults on its own (flatline-only features) — **must be combined with Engine B**, see below. |
-| **Engine B** | `backend/sentinel/engine_b.py` | ✅ Built | Physics-threshold detector, zero training needed. Fires correctly on the 3 MVP faults, zero false positives on nominal. `combined_score(ml_score, state)` = `max(SENTINEL, Engine B)`, degrades gracefully if the `.pkl` fails to load. |
-| **SimulatorTelemetryProvider** | `backend/sherlock/simulator_provider.py` | ✅ Built | Bridges `SatelliteState` → SHERLOCK's `TelemetrySnapshot`. Smoke-tested. |
-| **SHERLOCK** (LLM + graph) | `backend/sherlock/agent.py` | ✅ Built | Claude via OpenRouter, graph-constrained, 3-retry validation loop. 18-edge causal graph confirmed real. |
-| **Physics Simulator** | `backend/simulator/engine.py` | ✅ Built | `simulate_scenario()` + `run_monte_carlo()` exist and work. |
+| **3D Dashboard UI** | `src/App.jsx` + `src/components/` | ✅ Working | Silver/black palette, PillNav, 9-agent drill-down console, SHERLOCK causal graph — but **still 100% mocked data**, zero WebSocket calls. This is the actual current blocker. |
+| **SENTINEL — flatline/XGBoost (Engine A)** | `backend/models/sentinel_production.pkl` + `backend/sentinel/engines.py` | 🟡 Working, structurally limited | Real model, real predict_proba calls. Confirmed (again) via direct testing: does not fire on the ramping simulator faults on its own — this is inherent to what flatline features can see, not a bug. |
+| **SENTINEL — Engine B (physics threshold)** | `backend/sentinel/engine_b.py` | ✅ Built, reliable | Ours. Zero training needed. Fires correctly on all 3 MVP faults, zero false positives on nominal, after battery_temp recalibration. `combined_score(ml_score, state)` degrades gracefully if the `.pkl` fails to load. |
+| **SENTINEL — Engine B (spike/reversal)** | `backend/sentinel/engines.py::score_physics_spike` | 🟡 Working, noisy | Meet's. Different approach — MAD-based spike+reversal detection on 3 named channels, "1-of-3 isolation" to avoid correlated-motion false alarms. **Measured directly**: ~2-4% per-timestep false-positive rate on clean nominal data (11-26 false alarms per 600-step run across 5 random seeds). A consecutive-steps debounce (same shape as Engine A's) was tried and reverted — it suppresses ~100% of real detections too, since a spike+reversal is a one-shot transient, not a sustained state. Needs a rolling event-count debounce instead, properly tuned — flagged as open work in §4, not silently shipped broken. |
+| **SENTINEL — EPS/ADCS forecasters** | `backend/sentinel/eps_tcs.py`, `adcs.py` | ⬜ Trained offline, not wired into the live pipeline | Meet's work. Trains an XGBoost MultiOutputRegressor forecaster on real Mars Express spacecraft telemetry (`data/raw/mars_express/`) — genuinely the Telemanom-style "forecast, flag large error" approach `audit_findings.md` §4 discussed as a stretch goal. Not called by `api.py` yet. Real training data, real capability, just not plumbed in. |
+| **SimulatorTelemetryProvider** | Two copies — see below | 🟡 Duplicated | `backend/sherlock/simulator_provider.py` (ours, standalone module, smoke-tested) and an inline class of the same name inside `backend/api.py` (Meet's, actually running in the live bridge, slightly different parameter naming). Functionally overlapping. Consolidate onto one — low priority, doesn't block anything, see §4. |
+| **SHERLOCK** (LLM + graph) | `backend/sherlock/agent.py` | ✅ Built | Claude via OpenRouter, graph-constrained, 3-retry validation loop. 18-edge causal graph. Confirmed byte-identical across mohit-rawat, harsh-lal, and Meet's main — untouched by anyone, which is exactly what you want from a component everyone depends on. |
+| **Physics Simulator** | `backend/simulator/engine.py` | ✅ Built | `simulate_scenario()` + `run_monte_carlo()` exist and work. Also confirmed byte-identical across all 3 branches. |
 | **RECOVERY_CATALOG** | `backend/simulator/recovery.py` | ✅ Built | 6 named actions with subsystem modifiers. |
-| **ORACLE** | `backend/oracle/agent.py` | ✅ Actually fully wired | Confirmed `run_oracle()`, `_evaluate_action()`, fallback ranking mode all work and call `run_monte_carlo` for real. Just needs `backend/api.py` to import and call it. |
-| **requirements.txt** | `backend/requirements.txt` | ✅ Built | Didn't exist before. Install this on whichever laptop runs the demo. |
-| **ATHENA** | `backend/athena/agent.py` | ✅ Built (harsh-lal, merged 2026-09-03) | Two-Schema Pattern (LLM never outputs `safety_score`/`blended_rank`/`is_irreversible` — those are injected/computed post-validation, so the LLM can't hallucinate a score). Same JSON-parse → schema-validate → anti-hallucination → retry loop as SHERLOCK. 25/25 tests pass. Verified byte-for-byte against `backend/sherlock`, `backend/oracle`, `backend/simulator` on harsh-lal's branch — those three were untouched, so there was nothing to reconcile there. |
-| **`backend/api.py`** (the bridge) | — | ❌ **Does not exist — this is the #1 blocker** | Nothing above matters to a judge until this exists and the frontend talks to it. |
-| CHRONICLE, VITALS, GUARDIAN, QUARTERMASTER, SCRIBE | — | ❌ Not built | Build in the order below, after the bridge |
+| **ORACLE** | `backend/oracle/agent.py` | ✅ Fully wired | `run_oracle()`, `_evaluate_action()`, fallback ranking mode all call `run_monte_carlo` for real. |
+| **ATHENA** | `backend/athena/agent.py` | ✅ Built, merged from harsh-lal, 2026-09-03 | Two-Schema Pattern — LLM never outputs `safety_score`/`blended_rank`/`is_irreversible`, those are injected/computed after validation, so the LLM structurally cannot hallucinate a safety number. 25/25 tests pass. **Not yet called by `api.py`** — see §3. |
+| **`backend/api.py`** (the bridge) | `backend/api.py` | 🟡 Real and running, not feature-complete | Merged from Meet's `main` branch, 2026-09-03. Real FastAPI app, real `/ws` WebSocket endpoint, real `ConnectionManager` broadcast pattern, real background-task handling for ORACLE. Two bugs found and fixed during merge (see §3). Two gaps remain open: hardcoded single fault, no ATHENA call. |
+| **requirements.txt** | `backend/requirements.txt` | ✅ Built | Install this on whichever laptop runs the demo. |
 
 ---
 
-## Architecture Overview
+## 3. What changed in the `api.py` merge — read this before touching it
 
-```
-[Browser Frontend — src/App.jsx]
-       │  WebSocket ws://localhost:8000/ws/mission
-       │
-[FastAPI Bridge — backend/api.py]  ← BUILD THIS FIRST, BLOCKS EVERYTHING
-       │
-       ├── simulate_scenario()         [simulator/engine.py — EXISTS]
-       ├── SENTINEL.combined_score()   [sentinel/engine_b.py + sentinel_production.pkl — EXISTS]
-       ├── SHERLOCK.diagnose()         [sherlock/agent.py + simulator_provider.py — EXISTS]
-       ├── run_oracle()                [oracle/agent.py — EXISTS, fully wired]
-       ├── VITALS.compute()            [backend/vitals.py — BUILD, cheap]
-       ├── CHRONICLE.log()             [backend/chronicle.py — BUILD, cheap]
-       ├── ATHENA.plan()               [backend/athena/ — EXISTS, 25/25 tests passing]
-       ├── guardian_decide()           [backend/guardian.py — BUILD, rule-based, see MVP section]
-       ├── QUARTERMASTER.schedule()    [backend/quartermaster.py — BUILD, mostly static]
-       └── SCRIBE.generate()           [backend/scribe.py — BUILD, templating]
-```
+Pulled from Meet's `main` branch (which also had a full independent SENTINEL rewrite). Compared file-by-file against our branch before merging — this section is what actually changed, not a changelog dump.
+
+**Two real bugs found by reading + testing, fixed during merge:**
+
+1. **Timestamp bug.** `SimulatorTelemetryProvider.get_subsystem_snapshot()` and the SHERLOCK diagnosis call both did `datetime.fromtimestamp(frame.timestamp, tz=timezone.utc)` — but `frame.timestamp` is *simulation-elapsed seconds* (0.0 → 600.0), not a Unix epoch offset. That produces timestamps near 1970-01-01, not "now." Fixed: both now use `datetime.now(timezone.utc)`, since what actually matters for a live-streaming demo is the real wall-clock time the frame was processed.
+
+2. **Engine B false-positive rate, tried a fix, reverted it.** See the SENTINEL table row above. Documented in `api.py` itself with a comment explaining exactly why a naive fix is wrong, so nobody re-introduces it under time pressure.
+
+**Two known gaps, not fixed yet — deliberately, this needs real design time, not a rushed patch:**
+
+1. **`api.py` hardcodes `fault_scenario = "eps_cascade_power_failure"` at startup** and runs it once. There is no code path that reads a fault selection from the frontend at all — `websocket_endpoint()` receives incoming text and discards it (`data = await websocket.receive_text()`, never parsed). The frontend's scenario picker (3 cards + severity slider) has nothing to actually call yet. **This is the single most important thing to build next** — a `POST /trigger {fault, severity}` endpoint (or a parsed WS message) that starts `simulate_stream()` with the frontend's actual selection, replacing the hardcoded fault. Also: `eps_cascade_power_failure` is one of the 3 *weak-signal* faults from §1 — the current hardcoded demo is running the fault least likely to visibly trigger. Swap the hardcoded default to `tcs_thermal_runaway` immediately, even before the picker is wired.
+
+2. **ATHENA is not called anywhere in `api.py`.** The pipeline currently stops at GUARDIAN. Given ATHENA is done and tested (§2), wiring it in is small: after the ORACLE background task resolves, call `AthenaAgent().plan(sherlock_diagnosis, oracle_response)` and broadcast `.to_ws_message()`. Should take under an hour.
 
 ---
 
-## Phase 1 — The Bridge 🔴 BLOCKS EVERYTHING (backend)
+## 4. What's next — in priority order
 
-**Goal:** One button click → real data flowing over a real WebSocket. Nothing else matters until this exists.
-
-```python
-# backend/api.py
-from fastapi import FastAPI, WebSocket
-from backend.simulator.engine import simulate_scenario
-from backend.sentinel.engine_b import combined_score
-from backend.sherlock.agent import SherlockAgent
-from backend.sherlock.simulator_provider import SimulatorTelemetryProvider
-from backend.oracle.agent import run_oracle
-
-# POST /trigger  {"fault": "tcs_thermal_runaway", "severity": 0.7}
-# WS   /ws/mission — streams JSON events shaped per the contract below
-```
-
-**Full WebSocket message contract — see [`backend.md`](backend.md) for every message type** (`telemetry`, `sentinel_alert`, `sherlock_diagnosis`, `oracle`, `guardian`, `athena`, `quartermaster`, `scribe`). The 3 that existed before (`telemetry`, `sentinel_alert`, `sherlock_diagnosis`) are unchanged; the other 5 are newly specified there so frontend and backend don't drift while building in parallel.
-
-### Frontend change in `src/App.jsx` (this is Mohit's first task)
-
-Replace the fake `setTimeout` cascade in `triggerAnomaly()` with:
-```js
-const ws = new WebSocket('ws://localhost:8000/ws/mission');
-ws.onmessage = (e) => {
-  const msg = JSON.parse(e.data);
-  if (msg.type === 'telemetry') updateTelemetry(msg);
-  if (msg.type === 'sentinel_alert') setScenarioPhase('detected');
-  if (msg.type === 'sherlock_diagnosis') setScenarioPhase('diagnosing');
-  if (msg.type === 'guardian') {
-    if (msg.requires_human_approval) setScenarioPhase('awaiting_approval');
-    else setScenarioPhase('auto_executed');
-  }
-};
-fetch('http://localhost:8000/trigger', {
-  method: 'POST',
-  body: JSON.stringify({ fault: selectedFault, severity: sliderValue }),
-});
-```
-
-**API response caching — do not skip this.** Cache one full real response set (telemetry + sentinel_alert + sherlock_diagnosis + guardian) for each of the 3 MVP faults as static JSON fallback files. If the LLM call is slow/down mid-demo, serve the cached response with a visible `[CACHED]` label rather than the demo hanging. This is the single highest-leverage 20 minutes you can spend before going on stage.
+1. **Wire the frontend to the real `api.py`.** This is the actual #1 blocker — everything above this line is real, working backend code that nobody outside a Python REPL can see yet. Concretely:
+   - Add a `POST /trigger` endpoint to `api.py` that accepts `{fault, severity}` and starts a `simulate_stream()` run for that specific fault (currently hardcoded).
+   - Replace `src/App.jsx`'s `FAULT_SCENARIOS` mock object with a real `WebSocket('ws://localhost:8000/ws')` connection; map incoming `{type: "telemetry"|"sentinel_alert"|"sherlock_diagnosis"|"guardian_action"|"oracle_simulation"}` messages onto the existing `scenarioPhase` state machine — the phase names already line up closely with what `api.py` broadcasts.
+   - Swap the hardcoded fault to `tcs_thermal_runaway` as an immediate stopgap even before the picker is wired end-to-end.
+2. **Wire ATHENA into `api.py`** (see §3 — small, well-scoped, already tested).
+3. **Fix Engine B's debounce properly.** Not a consecutive-steps filter (tried, reverted — kills real signal). Try a rolling event-count window (e.g., "≥2 raw spike flags within any 20-30 step window") and *actually measure it* against all 6 faults + nominal before shipping, the same way every other claim in this doc was verified. Budget real time for this — it's a tuning problem, not a one-line fix.
+4. **VITALS + CHRONICLE** — no LLM, cheap, straightforward functions over the same `SatelliteState` stream `api.py` already has:
+   ```python
+   def compute_health_score(state) -> dict:
+       battery_score = state.eps.battery_soc * 100
+       thermal_score = max(0, 100 - abs(state.tcs.panel_temp - 25) * 2)
+       cpu_score = (1 - state.obc.cpu_load) * 100
+       comms_score = (1 - state.ttc.bit_error_rate) * 100
+       overall = battery_score*0.35 + thermal_score*0.25 + cpu_score*0.20 + comms_score*0.20
+       return {"overall_score": round(overall, 1), "rul_orbits": compute_rul(state)}
+   ```
+5. **Pull GUARDIAN's inline logic into `backend/guardian.py`** as its own module (it's already correct, just embedded in `simulate_stream()` — extracting it is almost pure copy-paste, and makes it independently testable).
+6. **QUARTERMASTER** — mostly static: 2 hardcoded ground-station passes, offload rule on HIGH/CRITICAL severity. Lowest judge-value agent, don't over-invest.
+7. **SCRIBE** — Jinja2 template over the full pipeline output → markdown runbook. One small LLM call for a 2-sentence executive summary; everything else plain templating (reliability > cleverness in front of judges).
+8. **Consolidate the duplicate `SimulatorTelemetryProvider`** (§2) onto one implementation. Low priority, doesn't block anything.
+9. **Wire Meet's EPS/ADCS forecasters (`eps_tcs.py`/`adcs.py`) as a real Engine C**, once Engine B's debounce is solid — this is real, trained, working forecast-residual capability that's currently sitting unused. Worth doing specifically because it's the Telemanom-style approach `audit_findings.md` recommended as the *right* fix for slow-ramp faults, and someone already built the training pipeline for it.
+10. **Re-tune the other 3 faults** in `faults.py` (`eps_battery_degradation`, `adcs_reaction_wheel_degradation`, `eps_cascade_power_failure`) so all 6 are demo-viable, not just 3.
 
 ---
 
-## Later, once the MVP is solid (we have the hours — do these too)
+## 5. Which LLM to use — brainstormed, optimized for free + fast
 
-Nothing below is a "nice to have we'll probably cut." With 40 hours, the MVP (Phase 1 + the 3-card/2-path demo) should take a fraction of the time budget. Once it's demoed clean at least twice end-to-end, keep building — the fuller pipeline is a straightforwardly better demo, not scope creep.
+SHERLOCK and ATHENA both currently call `anthropic/claude-sonnet-4-5` via OpenRouter. That's a paid model — worth knowing the free/cheap options given cost and rate-limit risk during a live demo, especially with two agents both making LLM calls in the same pipeline run.
 
-### Phase 2 — VITALS + CHRONICLE (no LLM, cheap)
-```python
-def compute_health_score(state) -> dict:
-    battery_score = state.eps.battery_soc * 100        # weight: 35%
-    thermal_score = max(0, 100 - abs(state.tcs.panel_temp - 25) * 2)  # weight: 25%
-    cpu_score = (1 - state.obc.cpu_load) * 100          # weight: 20%
-    comms_score = (1 - state.ttc.bit_error_rate) * 100  # weight: 20%
-    overall = battery_score*0.35 + thermal_score*0.25 + cpu_score*0.20 + comms_score*0.20
-    return {"overall_score": round(overall, 1), "rul_orbits": compute_rul(state)}
-```
-CHRONICLE: threshold watcher, string templates, no LLM. See `backend.md` for the exact threshold table (recalibrated — the original numbers false-positive on this simulator's nominal thermal cycling, see `audit_findings.md` §3).
+**What actually matters here, given how SHERLOCK/ATHENA are built:** both already have a 3-retry JSON-schema-validation loop with re-prompting on failure (see `backend/sherlock/agent.py` / `backend/athena/agent.py`). That retry loop is what makes swapping models low-risk — a model that occasionally messes up strict JSON still works fine, it just costs a retry. The two things that actually matter for the swap: (a) genuinely free or near-free, (b) fast enough that 2 sequential LLM calls (SHERLOCK then ATHENA) per triggered fault doesn't make the demo feel laggy.
 
-### Phase 3 — Re-tune the other 3 faults (backend, ~30-45 min)
-Once the MVP's 3 cards are proven, extend the scenario picker to all 6 by fixing `eps_battery_degradation`/`adcs_reaction_wheel_degradation`/`eps_cascade_power_failure`'s modifier magnitudes in `faults.py` so they produce a visible excursion within ~10-20 minutes of sim time instead of needing hours. Re-run `run_monte_carlo` afterward to confirm ORACLE's outcome distributions still make sense — these constants feed both.
+**Recommended primary: Google Gemini 2.0/2.5 Flash, via OpenRouter's free tier.**
+Zero code changes beyond the `model=` string — both agents already use OpenRouter's OpenAI-compatible client (`base_url="https://openrouter.ai/api/v1"`), and OpenRouter has offered free-tier Gemini Flash variants (check the current exact model ID at `https://openrouter.ai/models?max_price=0` right before you switch — these IDs and which ones are free shift over time, don't hardcode from memory). Gemini Flash is built for low-latency structured output and has historically been one of the more reliable free options for strict JSON schemas, which matters a lot given both agents demand exact schema compliance.
 
-### Phase 4 — ATHENA — ✅ DONE (harsh-lal, merged 2026-09-03)
-No longer a build item. `AthenaAgent.plan(sherlock_diagnosis, oracle_response)` → `RecoveryPlan` with a `.to_ws_message()` method that already matches this doc's own `athena` WS message shape. Uses the Two-Schema Pattern (LLM produces `AthenaLLMOption` — no score fields; Python injects ORACLE's real `safety_score`, computes `blended_rank`, and looks up `is_irreversible` from a hardcoded frozenset, so the LLM can never hallucinate a safety number). `backend/api.py` just needs to call `AthenaAgent().plan(...)` after ORACLE and forward `to_ws_message()`.
+**Recommended fallback if the free tier rate-limits mid-demo: Groq, hosting Llama 3.3 70B (or whatever their current fastest Llama/open model is).**
+Groq's own API (not OpenRouter) is inference-hardware-optimized for raw speed — routinely the fastest tokens/sec of any widely-available option, with a generous free tier well-suited to hackathon use. Requires a small code change: swap `base_url` to Groq's endpoint (`https://api.groq.com/openai/v1`) and the API key env var, same OpenAI-compatible client shape otherwise. Worth having this as a literal backup code path (an env var toggle between OpenRouter/Gemini and Groq/Llama) so a rate-limit mid-demo is a 5-second switch, not a panic.
 
-### Phase 5 — QUARTERMASTER (mostly static)
-2 hardcoded ground-station passes (realistic names/times). If severity HIGH/CRITICAL, offload 35% load to a backup satellite in the fixture fleet.
-
-### Phase 6 — SCRIBE
-Jinja2 template collecting all agent outputs into a markdown runbook. One small Claude call for a 2-sentence executive summary. Triggers a `.txt`/`.md` auto-download.
-
-### Phase 7 — Full end-to-end run
-1. `pip install -r backend/requirements.txt` on the actual demo laptop
-2. `uvicorn backend.api:app --reload --port 8000`
-3. `npm run dev`
-4. Run the full pipeline at least 3 times clean, on all demo-ready faults, before touching anything else
-5. Fix only what's broken — no new features once this phase starts
+**Action item, not yet done:** actually implement the backup toggle (env-var-driven provider switch in `sherlock/agent.py` and `athena/agent.py`) and test both paths once, before relying on it live. A fallback you haven't tested is not a fallback.
 
 ---
 
-## WOW Factors — Things That Make Judges Stop
+## 6. WOW Factors — Things That Make Judges Stop
 
-1. **Two GUARDIAN outcomes, live, same pipeline** — the easy auto-executed path and the human-approval path from the *same* 3 real faults, controlled by one severity slider. This is the actual differentiator, not a feature list.
-2. **The FDIR/Safe-Mode tier** (if built) — "sudden temperature spike" is a known, standard question in spacecraft ops, and `tcs_thermal_runaway` is that exact scenario. Answering it with real spacecraft doctrine (FDIR, Safe Mode) rather than improvising is a strong Q&A moment.
-3. **Real OPSSAT-AD data on SENTINEL** — "trained on real ESA satellite telemetry, F1 0.65 / ROC-AUC 0.79 on held-out test data. Not synthetic." (Verified number — see `audit_findings.md`, do not cite the old 0.89 figure, it never existed in any results file.)
-4. **Graph-constrained SHERLOCK** — Claude can only pick root causes from the physical causal graph (18 real edges, confirmed in code). Show the graph visually.
-5. **`run_monte_carlo`: 100 physics simulations in ~2 seconds** — real stochastic outcomes, not made-up probability bars.
-6. **SCRIBE runbook auto-downloads** (if built) — the audit trail mission controllers keep on file.
-7. **Agent Timeline Strip** — horizontal bar showing which agent is active, lighting up as the real pipeline progresses.
-
----
-
-## Scenario Picker UI (frontend)
-
-3 scenario cards (not 6 — see MVP section for why), each with a severity slider that determines which GUARDIAN path plays out:
-
-| Scenario | Fault Key | Severity range | Low end → | High end → |
-|---|---|---|---|---|
-| 🌡️ Thermal Runaway | `tcs_thermal_runaway` | 0.3 – 1.0 | AUTOMATED_GUARDED | MANUAL_INTERLOCK |
-| 📡 Signal Dropout | `ttc_signal_dropout` | 0.3 – 1.0 | AUTOMATED_GUARDED | MANUAL_INTERLOCK |
-| 🚀 Thruster Fault | `propulsion_thruster_fault` | 0.3 – 1.0 | AUTOMATED_GUARDED | MANUAL_INTERLOCK |
-
-Each card sends `POST /trigger` with `{ fault: "<key>", severity: <value> }`. Exact severity→urgency mapping is SHERLOCK's call (LLM-driven), but as a UI hint, treat severity ≥ 0.7 as "likely high-risk path" so the slider itself communicates what's about to happen.
+1. **Two GUARDIAN outcomes, live, same pipeline** — the easy auto-executed path and the human-approval path from the *same* 3 real faults, controlled by one severity slider.
+2. **The FDIR/Safe-Mode tier** — already implemented in `api.py`, not just planned. "Sudden temperature spike" is a known, standard question in spacecraft ops, and `tcs_thermal_runaway` is that exact scenario.
+3. **Real OPSSAT-AD data on SENTINEL** — "trained on real ESA satellite telemetry, F1 0.65 / ROC-AUC 0.79 on held-out test data. Not synthetic." (Verified — see `audit_findings.md`, do not cite the old 0.89 figure, it never existed in any results file.)
+4. **Graph-constrained SHERLOCK** — Claude can only pick root causes from the physical causal graph (18 real edges, confirmed in code, confirmed identical across all 3 team branches). Show the graph visually — the frontend already does this with an animated SVG backtrace.
+5. **Two independent SENTINEL detection strategies, both measured, honestly reported** — this doc doesn't just claim one engine works, it shows the actual false-positive/false-negative numbers for both approaches tried. That level of rigor is itself a differentiator with technical judges.
+6. **ATHENA's Two-Schema anti-hallucination pattern** — same discipline as SHERLOCK's graph constraint, applied to a different failure mode (score hallucination instead of root-cause hallucination). Worth explaining explicitly if asked "how do you stop the LLM from making things up."
+7. **`run_monte_carlo`: 100 physics simulations in ~2 seconds** — real stochastic outcomes, not made-up probability bars.
 
 ---
 
-## Digital Twin Emphasis (throughout the UI)
-
-- Label the physics simulator section **"DIGITAL TWIN ENGINE"**
-- Visible badge: "Physics-Based Digital Twin | 6 Subsystems | 18 Causal Edges"
-- During Monte Carlo: count-up "Simulating 87/100 futures..."
-- ORACLE results panel: "Digital Twin Prediction Results"
-
----
-
-## Real Satellite Fault Physics Rules (Engine B thresholds — recalibrated)
-
-| Parameter | Warning | Critical | Mission Loss | Note |
-|---|---|---|---|---|
-| Battery SOC | < 50% | < 25% | < 15% | unchanged |
-| Bus Voltage (28V bus) | < 25V | < 22V | < 18V | unchanged |
-| Panel Temperature | > 55°C or < -10°C | > 80°C or < -20°C | > 100°C | unchanged |
-| **Battery Temperature** | **> 44°C** | **> 48°C** | **> 52°C** | **recalibrated — original 35/40/45°C false-positives on this simulator's nominal orbital thermal cycling (verified up to 41.4°C with zero fault active)** |
-| Attitude Error | > 5° | > 15° | > 30° (tumble) | unchanged |
-| Reaction Wheel Speed | > 5000 RPM | > 6000 RPM (saturation) | Wheel failure | unchanged |
-| Signal Strength | < -95 dBm | < -105 dBm | < -115 dBm (loss of lock) | unchanged |
-| CPU Load | > 70% | > 90% | Watchdog trip | unchanged |
-
-This table is implemented and tested in `backend/sentinel/engine_b.py` — don't hand-copy it elsewhere, import from there.
-
----
-
-## Environment Setup
+## 7. Environment Setup
 
 ```bash
-pip install -r backend/requirements.txt   # now exists, wasn't there before
+pip install -r backend/requirements.txt
 export OPENROUTER_API_KEY="your_key_here"
 uvicorn backend.api:app --reload --port 8000   # backend
 npm run dev                                     # frontend, separate terminal
 ```
 
-**Model files are gitignored and git-lfs is not configured in this repo.** Whoever runs the live demo needs `backend/models/*.joblib`/`*.pkl` copied onto that machine directly (zip + AirDrop/USB/Slack, not git). See `backend.md` for full details — this bit anyone who's picked up backend cold tonight.
+**Model files are gitignored and git-lfs is not configured in this repo.** Whoever runs the live demo needs `backend/models/*.joblib`/`*.pkl` copied onto that machine directly (zip + AirDrop/USB/Slack, not git). See `backend.md` for full details.
 
 ---
 
-## File Map
+## 8. File Map
 
 ```
 aero_astra/
 ├── backend/
-│   ├── api.py                    ← BUILD FIRST — FastAPI WebSocket bridge
+│   ├── api.py                    ✅ EXISTS — real WebSocket bridge, see §3 for open gaps
 │   ├── requirements.txt          ✅ EXISTS
-│   ├── vitals.py                 ← BUILD Phase 2
-│   ├── chronicle.py              ← BUILD Phase 2
-│   ├── guardian.py               ← BUILD (MVP — see decision function above)
-│   ├── quartermaster.py          ← BUILD Phase 5
-│   ├── scribe.py                 ← BUILD Phase 6
-│   ├── athena/
-│   │   ├── agent.py              ← BUILD Phase 4
-│   │   ├── prompts.py            ← BUILD Phase 4
-│   │   └── schemas.py            ← BUILD Phase 4
+│   ├── vitals.py                 ← BUILD §4.4
+│   ├── chronicle.py              ← BUILD §4.4
+│   ├── guardian.py               ← EXTRACT from api.py, §4.5
+│   ├── quartermaster.py          ← BUILD §4.6
+│   ├── scribe.py                 ← BUILD §4.7
+│   ├── athena/                   ✅ EXISTS — not yet called by api.py, §3
 │   ├── simulator/                ✅ EXISTS
 │   ├── sentinel/
-│   │   ├── engine_b.py           ✅ EXISTS — physics threshold detector
+│   │   ├── engine_b.py           ✅ EXISTS — ours, reliable physics-threshold detector
+│   │   ├── engines.py            🟡 EXISTS — Meet's, Engine B needs debounce fix (§4.3)
+│   │   ├── eps_tcs.py, adcs.py   ⬜ trained offline, not wired in yet (§4.9)
 │   │   └── train.py              ✅ FIXED — portable path, retrained model
 │   ├── sherlock/
-│   │   └── simulator_provider.py ✅ EXISTS — the bridge class
-│   ├── oracle/                   ✅ EXISTS — wire it into api.py, don't rebuild
+│   │   └── simulator_provider.py 🟡 duplicated with api.py's inline class, §4.8
+│   ├── oracle/                   ✅ EXISTS — wired into api.py
 │   └── models/                   ✅ EXISTS locally — must be copied to demo laptop manually
-└── src/App.jsx                   ← UPDATE Phase 1 — add WebSocket client, this is Mohit's task
+└── src/App.jsx                   ← still 100% mocked, §4.1 is the real blocker
 ```
 
 ---
 
-*See [`audit_findings.md`](audit_findings.md) for the full verification detail behind every claim above, and [`backend.md`](backend.md) for the complete backend handoff brief — API contract, current state, and phase-by-phase backend task list, written for whoever is picking this up without today's context.*
+*See [`audit_findings.md`](audit_findings.md) for the full verification detail behind the original SENTINEL/model claims, and [`backend.md`](backend.md) for the complete backend handoff brief written for whoever is picking this up without today's context.*

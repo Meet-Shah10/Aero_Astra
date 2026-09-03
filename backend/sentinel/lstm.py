@@ -1,47 +1,35 @@
-"""
-SENTINEL — Explanatory Anomaly Module (LSTM)
-Agent 1 of AERO-ASTRA
-
-This module extracts the LSTM forecaster from the active SENTINEL pipeline and repurposes it 
-strictly as an explanatory/diagnostic tool. When a sustained flatline fault is flagged by the 
-production model (Isolation Forest trained on flatline duration), this module generates a 
-predicted-vs-actual trace for that segment. Because flatline anomalies are highly predictable, 
-the LSTM residual collapses, visually confirming to operators that a stuck-sensor fault has occurred.
-"""
-
 import os
 import sys
+import json
 import logging
-import warnings
+import argparse
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix, average_precision_score, mean_absolute_error, mean_squared_error, r2_score
+from sklearn.multioutput import MultiOutputRegressor
+from sklearn.preprocessing import StandardScaler
+
+import xgboost as xgb
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-from pathlib import Path
+import joblib
+
+from sklearn.preprocessing import MinMaxScaler
 from tqdm import tqdm
-from sklearn.preprocessing import RobustScaler, MinMaxScaler
+import matplotlib.pyplot as plt
 
-warnings.filterwarnings("ignore")
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+log = logging.getLogger("SENTINEL")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Paths & Setup
-# ─────────────────────────────────────────────────────────────────────────────
 ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = ROOT / "data" / "raw" / "opssat"
-MODELS_DIR = ROOT / "models"
+MODELS_DIR = ROOT / "models" 
 RESULTS_DIR = ROOT / "results"
 
-for d in [MODELS_DIR, RESULTS_DIR]:
-    d.mkdir(parents=True, exist_ok=True)
+from .utils import extract_rolling_features, split_data
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-log = logging.getLogger("EXPLAIN_ANOMALY")
-
-# ─────────────────────────────────────────────────────────────────────────────
-# LSTM Architecture & Utilities
-# ─────────────────────────────────────────────────────────────────────────────
 class LSTMForecaster(nn.Module):
     def __init__(self, input_dim=1, hidden_dim=64, num_layers=2, dropout=0.2):
         super().__init__()
@@ -78,6 +66,7 @@ def extract_padded_sequences(values, seq_len=10):
     return seqs, targets
 
 def load_and_preprocess_data():
+    DATA_DIR = ROOT / 'data' / 'raw' / 'opssat'
     dataset_path = DATA_DIR / "dataset.csv"
     segments_path = DATA_DIR / "segments.csv"
 
@@ -238,6 +227,7 @@ def explain_segment(segment_id, model, segments_df, scaler, seq_len=10):
     log.info(f"Explanation trace saved to {save_path}")
 
 def demo_explanation():
+    DATA_DIR = ROOT / 'data' / 'raw' / 'opssat'
     features_df, segments_df = load_and_preprocess_data()
     
     # Prepare train/val splits for scaler
@@ -266,5 +256,8 @@ def demo_explanation():
         sample_segment = test_anomalous_segments[0]
         explain_segment(sample_segment, model, segments_df, scaler)
 
-if __name__ == "__main__":
-    demo_explanation()
+
+
+# Set up paths
+
+

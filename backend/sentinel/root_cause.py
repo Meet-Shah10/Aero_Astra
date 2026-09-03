@@ -1,25 +1,32 @@
-import xgboost as xgb
-import joblib
-
-import sys
 import os
+import sys
 import json
 import logging
+import argparse
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
-import joblib
-import torch
-import shap
+from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix, average_precision_score, mean_absolute_error, mean_squared_error, r2_score
+from sklearn.multioutput import MultiOutputRegressor
+from sklearn.preprocessing import StandardScaler
 
-# Set up paths
-ROOT = Path("/Users/meetshah1004/Desktop/Meet/Banglore_Space/Aero_Astra/backend")
-sys.path.append(str(ROOT / "sentinel"))
-from utils import extract_rolling_features
-from explain_anomaly import LSTMForecaster, extract_padded_sequences, build_lstm_loaders
+import xgboost as xgb
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
+import joblib
+import shap
+from .lstm import LSTMForecaster, extract_padded_sequences
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
-log = logging.getLogger("ROOT_CAUSE")
+log = logging.getLogger("SENTINEL")
+
+ROOT = Path(__file__).resolve().parent.parent
+MODELS_DIR = ROOT / "models" 
+RESULTS_DIR = ROOT / "results"
+
+from .utils import compute_run_length, extract_rolling_features
 
 class RootCauseAnalyzer:
     def __init__(self):
@@ -196,24 +203,3 @@ class RootCauseAnalyzer:
         
         return event
 
-if __name__ == "__main__":
-    analyzer = RootCauseAnalyzer()
-    
-    # Test on a few anomalous segments from the test set
-    # segments 1600+ are in the test set. Let's find some anomalies.
-    test_anomalies = analyzer.segments_df[
-        (analyzer.segments_df['train'] == 0) & 
-        (analyzer.segments_df['anomaly'] == 1)
-    ]['segment'].unique()
-    
-    if len(test_anomalies) > 0:
-        log.info(f"Testing root_cause.py on flagged segments: {test_anomalies[:3]}")
-        for seg_id in test_anomalies[:3]:
-            event = analyzer.analyze_segment(seg_id)
-            if event:
-                # Remove raw_window for cleaner printing
-                print_event = event.copy()
-                print_event['raw_window'] = f"[... {len(event['raw_window'])} values ...]"
-                print(json.dumps(print_event, indent=2))
-    else:
-        log.info("No anomalous test segments found.")

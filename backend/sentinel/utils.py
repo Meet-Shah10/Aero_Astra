@@ -1,9 +1,40 @@
+import os
+import sys
+import json
+import logging
+import argparse
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-import logging
-from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score, average_precision_score, confusion_matrix
+from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix, average_precision_score, mean_absolute_error, mean_squared_error, r2_score
+from sklearn.multioutput import MultiOutputRegressor
+from sklearn.preprocessing import StandardScaler
 
-log = logging.getLogger(__name__)
+import xgboost as xgb
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
+import joblib
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+log = logging.getLogger("SENTINEL")
+
+ROOT = Path(__file__).resolve().parent.parent
+MODELS_DIR = ROOT / "models" 
+RESULTS_DIR = ROOT / "results"
+
+class NpEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super(NpEncoder, self).default(obj)
+
+
 
 def compute_run_length(std_series, threshold=0.001):
     """
@@ -137,3 +168,4 @@ def evaluate_model(y_true, scores, name="Model", threshold=None, is_val=False, p
         'pr_auc': pr_auc,
         'confusion_matrix': cm.tolist()
     }
+
