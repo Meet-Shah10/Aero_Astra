@@ -63,6 +63,9 @@ const ModelInner = ({
   fadeIn,
   autoRotate,
   autoRotateSpeed,
+  lockRotation,
+  lockYaw,
+  lockPitch,
   onLoaded
 }) => {
   const outer = useRef(null);
@@ -298,19 +301,30 @@ const ModelInner = ({
     // FIX: Keep it exactly at origin (for rotation) but apply manual positional offsets
     outer.current.position.set(xOff, yOff, 0);
 
-    outer.current.rotation.x += cHov.current.x - phx;
-    outer.current.rotation.y += cHov.current.y - phy;
-
-    if (autoRotate) {
-      outer.current.rotation.y += autoRotateSpeed * dt;
+    if (lockRotation) {
+      // Converge to a fixed, deterministic pose instead of freezing wherever
+      // autoRotate/drag last left it — so overlays anchored to the model
+      // (e.g. a fault-location marker) land on the same spot every time.
+      outer.current.rotation.y = THREE.MathUtils.lerp(outer.current.rotation.y, lockYaw, 0.05);
+      outer.current.rotation.x = THREE.MathUtils.lerp(outer.current.rotation.x, lockPitch, 0.05);
+      vel.current.x = 0;
+      vel.current.y = 0;
       need = true;
-    }
+    } else {
+      outer.current.rotation.x += cHov.current.x - phx;
+      outer.current.rotation.y += cHov.current.y - phy;
 
-    outer.current.rotation.y += vel.current.x;
-    outer.current.rotation.x += vel.current.y;
-    vel.current.x *= INERTIA;
-    vel.current.y *= INERTIA;
-    if (Math.abs(vel.current.x) > 1e-4 || Math.abs(vel.current.y) > 1e-4) need = true;
+      if (autoRotate) {
+        outer.current.rotation.y += autoRotateSpeed * dt;
+        need = true;
+      }
+
+      outer.current.rotation.y += vel.current.x;
+      outer.current.rotation.x += vel.current.y;
+      vel.current.x *= INERTIA;
+      vel.current.y *= INERTIA;
+      if (Math.abs(vel.current.x) > 1e-4 || Math.abs(vel.current.y) > 1e-4) need = true;
+    }
 
     if (
       Math.abs(cPar.current.x - tPar.current.x) > 1e-4 ||
@@ -359,6 +373,9 @@ const ModelViewer = ({
   fadeIn = false,
   autoRotate = false,
   autoRotateSpeed = 0.35,
+  lockRotation = false,
+  lockRotationX,
+  lockRotationY,
   onModelLoaded
 }) => {
   useEffect(() => void useGLTF.preload(url), [url]);
@@ -370,6 +387,8 @@ const ModelViewer = ({
 
   const initPitch = deg2rad(defaultRotationX);
   const initYaw = deg2rad(defaultRotationY);
+  const lockPitch = deg2rad(lockRotationX ?? defaultRotationX);
+  const lockYaw = deg2rad(lockRotationY ?? defaultRotationY);
   const camZ = Math.min(Math.max(defaultZoom, minZoomDistance), maxZoomDistance);
 
   const capture = () => {
@@ -428,7 +447,7 @@ const ModelViewer = ({
       <Canvas
         shadows
         frameloop="demand"
-        gl={{ preserveDrawingBuffer: true }}
+        gl={{ preserveDrawingBuffer: true, alpha: true }}
         onCreated={({ gl, scene, camera }) => {
           rendererRef.current = gl;
           sceneRef.current = scene;
@@ -465,6 +484,9 @@ const ModelViewer = ({
             fadeIn={fadeIn}
             autoRotate={autoRotate}
             autoRotateSpeed={autoRotateSpeed}
+            lockRotation={lockRotation}
+            lockYaw={lockYaw}
+            lockPitch={lockPitch}
             onLoaded={onModelLoaded}
           />
         </Suspense>

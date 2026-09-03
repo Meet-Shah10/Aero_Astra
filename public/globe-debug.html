@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Framer Globe Debug</title>
+  <style>
+    body { margin: 0; background: #05060F; color: white; font-family: monospace; }
+    #log { padding: 20px; white-space: pre-wrap; font-size: 12px; color: #00E5FF; position: fixed; top: 0; left: 0; right: 0; max-height: 40vh; overflow-y: auto; background: rgba(0,0,0,0.8); z-index: 999; }
+    #mount { width: 100vw; height: 60vh; margin-top: 40vh; }
+  </style>
+</head>
+<body>
+<div id="log">Loading Framer Globe...\n</div>
+<div id="mount"></div>
+
+<script type="module">
+  const log = document.getElementById('log');
+  function print(msg) {
+    log.textContent += msg + '\n';
+    console.log(msg);
+  }
+
+  // Step 1: Try to import the framer redirect URL
+  print('[1] Attempting: import("https://framer.com/m/Globe-prod-gCnI.js")');
+  
+  try {
+    const mod = await import('https://framer.com/m/Globe-prod-gCnI.js');
+    print('[2] Import SUCCESS. Keys: ' + Object.keys(mod).join(', '));
+    print('[3] mod.default type: ' + typeof mod.default);
+    print('[4] mod.default: ' + String(mod.default).slice(0, 300));
+    
+    // Step 2: Try to import React and ReactDOM 
+    const React = await import('https://esm.sh/react@18');
+    const ReactDOM = await import('https://esm.sh/react-dom@18/client');
+    print('[5] React loaded, version: ' + React.version);
+
+    // Step 3: Try to render the Globe
+    const GlobeComponent = mod.default;
+    print('[6] GlobeComponent: ' + GlobeComponent?.name + ' type: ' + typeof GlobeComponent);
+    
+    const container = document.getElementById('mount');
+    const root = ReactDOM.createRoot(container);
+    root.render(React.createElement(GlobeComponent, {
+      style: { width: '100%', height: '100%' },
+      width: 600,
+      height: 600,
+    }));
+    print('[7] render() called — check if globe appears below');
+    
+  } catch (err) {
+    print('[ERROR] ' + err.name + ': ' + err.message);
+    print('[STACK] ' + (err.stack || '').slice(0, 500));
+  }
+</script>
+</body>
+</html>

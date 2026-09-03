@@ -3,11 +3,13 @@
 import React, { useRef, useEffect } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
-import Earth from './Earth';
 import DebrisField from './DebrisField';
 
-// Camera orbits slowly and dollies in (150 → 80) when launched
-function CameraController({ launched }) {
+// Camera orbits slowly and dollies in (150 → 80) when launched, then eases
+// back out (80 → 130) once the dashboard chrome is on screen — a tighter
+// shot reads as an establishing dolly, a wider one reads as "sitting in
+// mission control" behind the panels.
+function CameraController({ launched, dashboard }) {
   const { camera } = useThree();
   const angleRef = useRef(0);
   const currentDistanceRef = useRef(150);
@@ -23,9 +25,12 @@ function CameraController({ launched }) {
     // 1. Slow horizontal orbit 0.05 rad/s
     angleRef.current += 0.05 * delta;
 
-    // 2. Dolly-in on launch: 150 → 80 over 1.5s with easeOutQuart
+    // 2. Dolly-in on launch: 150 → 80 over 1.5s with easeOutQuart, then
+    //    ease back out to 130 once the dashboard is showing.
     let targetDistance = 150;
-    if (launched) {
+    if (dashboard) {
+      targetDistance = 130;
+    } else if (launched) {
       if (startTimeRef.current === null) {
         startTimeRef.current = state.clock.getElapsedTime();
       }
@@ -38,7 +43,7 @@ function CameraController({ launched }) {
     currentDistanceRef.current = THREE.MathUtils.lerp(
       currentDistanceRef.current,
       targetDistance,
-      0.08
+      0.04
     );
 
     const dist = currentDistanceRef.current;
@@ -51,30 +56,29 @@ function CameraController({ launched }) {
   return null;
 }
 
-export default function Scene3D({ launched }) {
+export default function Scene3D({ launched, dashboard = false }) {
   return (
     <div style={{
       position: 'fixed',
       inset: 0,
       width: '100%',
       height: '100%',
-      zIndex: 0,
+      zIndex: 2,
       pointerEvents: 'none',
-      background: '#05060F',
+      background: 'transparent',
     }}>
       <Canvas
         dpr={[1, 2]}
         camera={{ position: [0, 0, 150], fov: 45 }}
-        gl={{ antialias: true, alpha: false }}
+        gl={{ antialias: true, alpha: true }}
         style={{ width: '100%', height: '100%' }}
       >
         <ambientLight intensity={0.1} />
         <directionalLight position={[10, 5, 8]} intensity={1.2} />
 
-        <Earth />
         <DebrisField />
 
-        <CameraController launched={launched} />
+        <CameraController launched={launched} dashboard={dashboard} />
       </Canvas>
     </div>
   );
