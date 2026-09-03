@@ -67,8 +67,9 @@ If a telemetry value on screen reads `1.24, 1.24, 1.24, 1.24` for ten ticks in a
 | **RECOVERY_CATALOG** | `backend/simulator/recovery.py` | ✅ Built | 6 named actions with subsystem modifiers. |
 | **ORACLE** | `backend/oracle/agent.py` | ✅ Actually fully wired | Confirmed `run_oracle()`, `_evaluate_action()`, fallback ranking mode all work and call `run_monte_carlo` for real. Just needs `backend/api.py` to import and call it. |
 | **requirements.txt** | `backend/requirements.txt` | ✅ Built | Didn't exist before. Install this on whichever laptop runs the demo. |
+| **ATHENA** | `backend/athena/agent.py` | ✅ Built (harsh-lal, merged 2026-09-03) | Two-Schema Pattern (LLM never outputs `safety_score`/`blended_rank`/`is_irreversible` — those are injected/computed post-validation, so the LLM can't hallucinate a score). Same JSON-parse → schema-validate → anti-hallucination → retry loop as SHERLOCK. 25/25 tests pass. Verified byte-for-byte against `backend/sherlock`, `backend/oracle`, `backend/simulator` on harsh-lal's branch — those three were untouched, so there was nothing to reconcile there. |
 | **`backend/api.py`** (the bridge) | — | ❌ **Does not exist — this is the #1 blocker** | Nothing above matters to a judge until this exists and the frontend talks to it. |
-| CHRONICLE, VITALS, ATHENA, GUARDIAN, QUARTERMASTER, SCRIBE | — | ❌ Not built | Build in the order below, after the bridge |
+| CHRONICLE, VITALS, GUARDIAN, QUARTERMASTER, SCRIBE | — | ❌ Not built | Build in the order below, after the bridge |
 
 ---
 
@@ -86,7 +87,7 @@ If a telemetry value on screen reads `1.24, 1.24, 1.24, 1.24` for ten ticks in a
        ├── run_oracle()                [oracle/agent.py — EXISTS, fully wired]
        ├── VITALS.compute()            [backend/vitals.py — BUILD, cheap]
        ├── CHRONICLE.log()             [backend/chronicle.py — BUILD, cheap]
-       ├── ATHENA.plan()               [backend/athena/ — BUILD, LLM-heavy]
+       ├── ATHENA.plan()               [backend/athena/ — EXISTS, 25/25 tests passing]
        ├── guardian_decide()           [backend/guardian.py — BUILD, rule-based, see MVP section]
        ├── QUARTERMASTER.schedule()    [backend/quartermaster.py — BUILD, mostly static]
        └── SCRIBE.generate()           [backend/scribe.py — BUILD, templating]
@@ -157,8 +158,8 @@ CHRONICLE: threshold watcher, string templates, no LLM. See `backend.md` for the
 ### Phase 3 — Re-tune the other 3 faults (backend, ~30-45 min)
 Once the MVP's 3 cards are proven, extend the scenario picker to all 6 by fixing `eps_battery_degradation`/`adcs_reaction_wheel_degradation`/`eps_cascade_power_failure`'s modifier magnitudes in `faults.py` so they produce a visible excursion within ~10-20 minutes of sim time instead of needing hours. Re-run `run_monte_carlo` afterward to confirm ORACLE's outcome distributions still make sense — these constants feed both.
 
-### Phase 4 — ATHENA (LLM-heavy, copy SHERLOCK's pattern)
-Prompt = SHERLOCK diagnosis + ORACLE results + RECOVERY_CATALOG. Claude outputs JSON with `reasoningCoT[]` + ordered `steps[]`. Temperature 0.1, max 3 retries, same validation pattern as `sherlock/agent.py`.
+### Phase 4 — ATHENA — ✅ DONE (harsh-lal, merged 2026-09-03)
+No longer a build item. `AthenaAgent.plan(sherlock_diagnosis, oracle_response)` → `RecoveryPlan` with a `.to_ws_message()` method that already matches this doc's own `athena` WS message shape. Uses the Two-Schema Pattern (LLM produces `AthenaLLMOption` — no score fields; Python injects ORACLE's real `safety_score`, computes `blended_rank`, and looks up `is_irreversible` from a hardcoded frozenset, so the LLM can never hallucinate a safety number). `backend/api.py` just needs to call `AthenaAgent().plan(...)` after ORACLE and forward `to_ws_message()`.
 
 ### Phase 5 — QUARTERMASTER (mostly static)
 2 hardcoded ground-station passes (realistic names/times). If severity HIGH/CRITICAL, offload 35% load to a backup satellite in the fixture fleet.

@@ -160,9 +160,9 @@ def check_thresholds(state) -> list[str]:
 
 ### Phase 3 — Re-tune `faults.py`'s remaining 3 faults (§3) — stretch, not MVP
 
-### Phase 4 — ATHENA (LLM-heavy — copy `sherlock/agent.py`'s pattern almost directly)
+### Phase 4 — ATHENA — ✅ DONE, merged from harsh-lal's branch 2026-09-03
 
-Prompt = SHERLOCK diagnosis + `run_oracle()` results + relevant `RECOVERY_CATALOG` entries. Ask Claude for `reasoningCoT: list[str]` + ordered `steps: list[dict]`. Same temperature (0.1), same 3-retry JSON validation loop as SHERLOCK.
+`backend/athena/agent.py` exists, is tested (25/25 passing), and is verified byte-for-byte compatible — it imports `SherlockDiagnosis`/`OracleResponse` directly rather than redefining them, and its `demo.py` already chains SENTINEL → SHERLOCK → ORACLE → ATHENA end to end, including calling `sentinel/engine_b.py`. `AthenaAgent().plan(sherlock_diagnosis, oracle_response)` → `RecoveryPlan`; call `.to_ws_message()` for the exact `athena` WS shape below. Nothing left to build here — `api.py` just wires it in.
 
 ### Phase 5 — QUARTERMASTER (mostly static)
 
@@ -299,5 +299,5 @@ If all 4 pass, the backend half of the MVP is real and the frontend can build ag
 ## 8. Stretch goals (only after the MVP demos clean, twice, end to end)
 
 - Re-tune the 3 weak faults in `faults.py` (§3)
-- ATHENA, QUARTERMASTER, SCRIBE (§4 Phases 4-6)
+- QUARTERMASTER, SCRIBE (§4 Phases 5-6) — ATHENA is done, see §4 Phase 4
 - LSTM/Telemanom-style forecast-residual as a 3rd detection engine — tested and **not recommended as a priority**: on this simulator's slow ramp faults, a short-horizon forecaster's residual barely rises above noise (measured directly, see `audit_findings.md` §4). It also needs real retraining time (`sentinel_lstm.pt` is currently broken, same as §2). Only worth it once everything else is solid and there are still hours left.
