@@ -591,9 +591,19 @@ function App() {
         justifyContent: 'center',
       }}>
         <RotatingEarth width={window.innerWidth} height={window.innerHeight} isRotating={!showDashboard} />
-        {/* Satellite orbiting around the globe — only on landing page */}
-        {!launched && <OrbitSatellite count={1} radiusX={340} radiusY={100} rotation={-12} duration={18} itemSize={70} />}
       </div>
+
+      {/* Satellite orbiting around the globe — only on landing page, separate overlay */}
+      {!launched && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 2,
+          pointerEvents: 'none',
+        }}>
+          <OrbitSatellite count={1} radiusX={340} radiusY={100} rotation={-12} duration={18} itemSize={70} />
+        </div>
+      )}
 
       {/* ══════════════════════════════════════════════════════
           THREE.JS SCENE: Always mounted, camera dollies on launch
