@@ -201,7 +201,7 @@ export default function OrbitSatellite({
               progress={progress}
             />
           ))}
-        </div>
+        </motion.div>
       </div>
     </div>
   );
