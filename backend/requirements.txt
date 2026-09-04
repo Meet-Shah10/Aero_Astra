@@ -24,10 +24,11 @@ networkx
 shap
 matplotlib
 
-# Phase 1 bridge (backend/api.py) — not yet built, needed once it is
+# Phase 1 bridge (backend/api.py) — exists now, see roadmap.md §3
 fastapi
 uvicorn[standard]
 websockets
+python-dotenv
 
 # SCRIBE runbook templating — not yet built, needed once it is
 jinja2

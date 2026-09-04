@@ -458,7 +458,7 @@ function App() {
             <PillNav
               activeId={activeView}
               items={[
-                { id: 'dashboard', label: 'Dashboard', onClick: () => setActiveView('dashboard') },
+                { id: 'dashboard', label: 'Dashboard', onClick: () => { setActiveView('dashboard'); setActiveAgentPage(null); } },
                 { id: 'about', label: 'About', onClick: () => setActiveView('about') },
               ]}
             />

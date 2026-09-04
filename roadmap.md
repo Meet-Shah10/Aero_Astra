@@ -2,22 +2,22 @@
 
 > **Ownership split, effective now:** Mohit → 100% frontend (`src/`). Backend (`backend/`) is handed off completely — whoever picks it up should read [`backend.md`](backend.md) instead of this file. This file is the frontend-facing plan and the shared contract both sides build against.
 >
-> **Last full verification pass: 2026-09-03.** Everything marked ✅ below was actually run — tests executed, empirical checks against the real simulator, not just read on the page. Everything marked 🟡 is real code that exists but has a known, measured issue. Everything marked ⬜ genuinely doesn't exist yet.
+> **Last full verification pass: 2026-09-04.** Everything marked ✅ below was actually run — tests executed, empirical checks against the real simulator, not just read on the page. Everything marked 🟡 is real code that exists but has a known, measured issue. Everything marked ⬜ genuinely doesn't exist yet. Everything marked 🔴 is a confirmed bug that will visibly break the live demo if not fixed first.
 
 ---
 
 ## 0. Status checklist — tick these off as they land
 
 **Backend agents**
-- [x] SENTINEL — trained model + Engine B physics-threshold detector (see §2, known limitation on 3/6 faults)
+- [x] SENTINEL — trained model + 2 fallback detection paths (Engine B physics-threshold [ours], VITALS health-score fallback [Meet's]) — **see §2, none of them currently catch the flagship demo fault within the pipeline's actual run length, this is the top priority fix**
 - [x] SHERLOCK — LLM + 18-edge causal graph, untouched and verified identical across all 3 team branches
 - [x] Physics Simulator — `simulate_scenario()` + `run_monte_carlo()`, real orbital dynamics
 - [x] ORACLE — fully wired, 100-run Monte Carlo, fallback ranking mode
-- [x] ATHENA — merged from harsh-lal's branch, 25/25 tests passing, Two-Schema anti-hallucination pattern
-- [x] `backend/api.py` — merged from Meet's `main` branch, real FastAPI + WebSocket bridge (see §3 for what's real vs. still needed)
-- [ ] VITALS — not built
+- [x] ATHENA — merged from harsh-lal's branch, 25/25 tests passing, Two-Schema anti-hallucination pattern, **now actually called from `api.py`**
+- [x] `backend/api.py` — real FastAPI + WebSocket bridge, now has a working `POST /trigger` endpoint and CORS — see §3
+- [x] VITALS — `backend/vitals/agent.py`, real function, wired into `api.py`, streams `vitals_update` — **but see §2, one part of it fakes a detection rather than deriving it from telemetry**
+- [x] GUARDIAN — `backend/guardian/` is now its own module, 36/36 tests passing, 5-rule decision tree (more thorough than this doc's original 3-tier sketch — includes an irreversibility check and a safety-score floor)
 - [ ] CHRONICLE — not built
-- [ ] GUARDIAN — logic exists *inline inside `api.py`*, not yet its own module (see §3)
 - [ ] QUARTERMASTER — not built
 - [ ] SCRIBE — not built
 
@@ -25,12 +25,13 @@
 - [x] Full dashboard UI, silver/black palette, PillNav, agent console, 9 agent drill-down pages
 - [x] SHERLOCK causal-graph animation (SVG + GSAP)
 - [x] SENTINEL side-by-side dataset comparison view
-- [ ] Connected to the real `backend/api.py` WebSocket — **still 100% mocked data in `FAULT_SCENARIOS`, this is the #1 remaining blocker**
+- [x] Clicking "Dashboard" in the nav now resets back to the live 3D view instead of staying on whatever agent page was open
+- [ ] Connected to the real `backend/api.py` WebSocket — **still 100% mocked data in `FAULT_SCENARIOS`, this is still the #1 remaining blocker to an actual live demo**
 
-**Known bugs to fix before demo (see §3 for detail)**
-- [ ] `api.py` hardcodes a single fault (`eps_cascade_power_failure`) at startup — no way for the frontend's scenario picker to actually pick a fault yet
-- [ ] `api.py` doesn't call ATHENA at all — SENTINEL → SHERLOCK → ORACLE → GUARDIAN only
-- [ ] Engine B's spike detector (`score_physics_spike`) has an unsolved false-positive/debounce problem — documented, not silently shipped, see §3
+**🔴 Confirmed bugs — read before your next demo run-through**
+- [ ] **`tcs_thermal_runaway` (our flagship MVP fault) is not detected by anything within `api.py`'s actual 600-second run length.** Not Engine A, not Engine B (either version), not the new VITALS fallback. Measured directly — panel_temp only reaches ~55-57°C in 600s at any severity 0.7-1.0, and every current threshold (VITALS' 85°C, the noisy spike detector) sits well above that. This is a timing/calibration mismatch, not a missing feature — see §2 for the fix options.
+- [ ] **VITALS' fallback for `eps_cascade_power_failure` is not real detection — it's reading the ground-truth fault label.** `calculate_vitals()` contains `if state.active_fault == "eps_cascade_power_failure": eps_score -= state.fault_severity`. That's checking which fault was injected, not deriving a score from telemetry the way the rest of the function does. It "detects" this fault in ~6 seconds, but only because it's told the answer, not because it found anything. Flag this if anyone asks how detection works — the honest description is "hardcoded shortcut for this one fault," not "detected."
+- [ ] Engine B's new debounce (`PhysicsSpikeFilter`) reduces the *raw* false-positive count but not the underlying problem — see §2, the numbers are close for nominal vs. post-fault.
 
 ---
 
@@ -68,7 +69,7 @@ else:
     guardian_status = "AUTOMATED_GUARDED"
 ```
 
-This is a genuinely good sign of team alignment — this is almost exactly the pseudocode this doc sketched before `api.py` existed. It's currently inline in `api.py`'s `simulate_stream()`; pulling it into its own `backend/guardian.py` module is a cheap, worthwhile cleanup (see §4).
+Currently GUARDIAN's decision function lives in `backend/guardian/engine.py` as its own module — it is not yet imported by `api.py`, which still has its own simpler inline version. See §4.4.
 
 ### "Real" beats "impressive" — say this to yourself when a number looks boring
 
@@ -81,63 +82,48 @@ If a telemetry value on screen reads `1.24, 1.24, 1.24, 1.24` for ten ticks in a
 | Component | Location | Status | Notes |
 |---|---|---|---|
 | **3D Dashboard UI** | `src/App.jsx` + `src/components/` | ✅ Working | Silver/black palette, PillNav, 9-agent drill-down console, SHERLOCK causal graph — but **still 100% mocked data**, zero WebSocket calls. This is the actual current blocker. |
-| **SENTINEL — flatline/XGBoost (Engine A)** | `backend/models/sentinel_production.pkl` + `backend/sentinel/engines.py` | 🟡 Working, structurally limited | Real model, real predict_proba calls. Confirmed (again) via direct testing: does not fire on the ramping simulator faults on its own — this is inherent to what flatline features can see, not a bug. |
-| **SENTINEL — Engine B (physics threshold)** | `backend/sentinel/engine_b.py` | ✅ Built, reliable | Ours. Zero training needed. Fires correctly on all 3 MVP faults, zero false positives on nominal, after battery_temp recalibration. `combined_score(ml_score, state)` degrades gracefully if the `.pkl` fails to load. |
-| **SENTINEL — Engine B (spike/reversal)** | `backend/sentinel/engines.py::score_physics_spike` | 🟡 Working, noisy | Meet's. Different approach — MAD-based spike+reversal detection on 3 named channels, "1-of-3 isolation" to avoid correlated-motion false alarms. **Measured directly**: ~2-4% per-timestep false-positive rate on clean nominal data (11-26 false alarms per 600-step run across 5 random seeds). A consecutive-steps debounce (same shape as Engine A's) was tried and reverted — it suppresses ~100% of real detections too, since a spike+reversal is a one-shot transient, not a sustained state. Needs a rolling event-count debounce instead, properly tuned — flagged as open work in §4, not silently shipped broken. |
-| **SENTINEL — EPS/ADCS forecasters** | `backend/sentinel/eps_tcs.py`, `adcs.py` | ⬜ Trained offline, not wired into the live pipeline | Meet's work. Trains an XGBoost MultiOutputRegressor forecaster on real Mars Express spacecraft telemetry (`data/raw/mars_express/`) — genuinely the Telemanom-style "forecast, flag large error" approach `audit_findings.md` §4 discussed as a stretch goal. Not called by `api.py` yet. Real training data, real capability, just not plumbed in. |
-| **SimulatorTelemetryProvider** | Two copies — see below | 🟡 Duplicated | `backend/sherlock/simulator_provider.py` (ours, standalone module, smoke-tested) and an inline class of the same name inside `backend/api.py` (Meet's, actually running in the live bridge, slightly different parameter naming). Functionally overlapping. Consolidate onto one — low priority, doesn't block anything, see §4. |
-| **SHERLOCK** (LLM + graph) | `backend/sherlock/agent.py` | ✅ Built | Claude via OpenRouter, graph-constrained, 3-retry validation loop. 18-edge causal graph. Confirmed byte-identical across mohit-rawat, harsh-lal, and Meet's main — untouched by anyone, which is exactly what you want from a component everyone depends on. |
-| **Physics Simulator** | `backend/simulator/engine.py` | ✅ Built | `simulate_scenario()` + `run_monte_carlo()` exist and work. Also confirmed byte-identical across all 3 branches. |
+| **SENTINEL — flatline/XGBoost (Engine A)** | `backend/models/sentinel_production.pkl` + `backend/sentinel/engines.py` | 🟡 Working, structurally limited | Real model, real predict_proba calls. Confirmed via direct testing: does not fire on the ramping simulator faults on its own — inherent to what flatline features can see, not a bug. |
+| **SENTINEL — Engine B (physics threshold)** | `backend/sentinel/engine_b.py` | ✅ Built, reliable, **not currently used by `api.py`** | Ours. Zero training needed. Fires correctly on all 3 MVP faults *at a 3600s test duration*. `api.py` doesn't import or call this module at all — it uses the spike/reversal engine below instead. Worth wiring in alongside it, see §4. |
+| **SENTINEL — Engine B (spike/reversal + new debounce)** | `backend/sentinel/engines.py::PhysicsSpikeFilter` | 🟡 Improved, still not solved | Meet's. A rolling event-count debounce (`window_size=10, min_spikes_required=2`) was added since the last pass, replacing the old no-debounce version. **Re-measured directly, 5 seeds, at `api.py`'s actual runtime settings (`dt=1.0, duration=600s, fault_onset=5s`):** nominal (no fault) produces an average of **3.2 false incidents per 600-step run**; every one of the 6 faults produces **3.0-3.6 incidents post-onset** — statistically indistinguishable from the nominal false-alarm rate. The first detection often lands on the *exact same step* across different faults run with the same seed, which is the signature of noise-driven timing, not fault-driven detection. The debounce genuinely reduced the raw alarm count (good), but didn't improve fault-vs-nominal separation (the actual thing that matters). Not a wasted change — a real step forward on false-positive rate — just not yet "resolved" the way the code comment claims. |
+| **SENTINEL — VITALS-based fallback** | `backend/vitals/agent.py::calculate_vitals`, called from `api.py` | 🟡 Works for 2/6 faults, one entry is fake | `calculate_vitals()` computes real per-subsystem health scores from real telemetry (battery SOC, bus voltage, panel/battery temp, attitude error, wheel speed) — genuinely good, physics-grounded work. **Measured directly against `api.py`'s actual 600s window:** fires correctly and fast for `ttc_signal_dropout` (step 160) and `propulsion_thruster_fault` (step 75). Does **not** fire for `tcs_thermal_runaway` (health stays at 1.000 the entire run — panel_temp only reaches ~57°C in 600s, the function's threshold is 85°C) or `eps_battery_degradation`/`adcs_reaction_wheel_degradation` (both too weak, consistent with earlier findings). **`eps_cascade_power_failure` "fires" at step 6, but only because the function contains `if state.active_fault == "eps_cascade_power_failure": eps_score -= state.fault_severity` — that's reading the ground-truth fault label directly, not deriving anything from telemetry.** Call this out explicitly if it comes up in Q&A; it's the one part of this whole pipeline that doesn't hold up to "we don't fake detection." |
+| **SENTINEL — EPS/ADCS forecasters** | `backend/sentinel/eps_tcs.py`, `adcs.py` | ⬜ Trained offline, not wired into the live pipeline | Meet's work. Trains an XGBoost MultiOutputRegressor forecaster on real Mars Express spacecraft telemetry (`data/raw/mars_express/`) — genuinely the Telemanom-style "forecast, flag large error" approach `audit_findings.md` §4 discussed as a stretch goal. Not called by `api.py` yet. |
+| **SimulatorTelemetryProvider** | Two copies — see below | 🟡 Duplicated | `backend/sherlock/simulator_provider.py` (ours, standalone, smoke-tested) and an inline class of the same name inside `backend/api.py` (the one actually running, slightly different parameter naming). Consolidate onto one — low priority, doesn't block anything. |
+| **SHERLOCK** (LLM + graph) | `backend/sherlock/agent.py` | ✅ Built | Claude via OpenRouter, graph-constrained, 3-retry validation loop. 18-edge causal graph. Confirmed byte-identical across all 3 team branches at every check so far — untouched by anyone. |
+| **Physics Simulator** | `backend/simulator/engine.py` | ✅ Built | `simulate_scenario()` + `run_monte_carlo()` exist and work. Also byte-identical across all 3 branches. |
 | **RECOVERY_CATALOG** | `backend/simulator/recovery.py` | ✅ Built | 6 named actions with subsystem modifiers. |
-| **ORACLE** | `backend/oracle/agent.py` | ✅ Fully wired | `run_oracle()`, `_evaluate_action()`, fallback ranking mode all call `run_monte_carlo` for real. |
-| **ATHENA** | `backend/athena/agent.py` | ✅ Built, merged from harsh-lal, 2026-09-03 | Two-Schema Pattern — LLM never outputs `safety_score`/`blended_rank`/`is_irreversible`, those are injected/computed after validation, so the LLM structurally cannot hallucinate a safety number. 25/25 tests pass. **Not yet called by `api.py`** — see §3. |
-| **`backend/api.py`** (the bridge) | `backend/api.py` | 🟡 Real and running, not feature-complete | Merged from Meet's `main` branch, 2026-09-03. Real FastAPI app, real `/ws` WebSocket endpoint, real `ConnectionManager` broadcast pattern, real background-task handling for ORACLE. Two bugs found and fixed during merge (see §3). Two gaps remain open: hardcoded single fault, no ATHENA call. |
-| **requirements.txt** | `backend/requirements.txt` | ✅ Built | Install this on whichever laptop runs the demo. |
+| **ORACLE** | `backend/oracle/agent.py` | ✅ Fully wired | `run_oracle()`, `_evaluate_action()`, fallback ranking mode all call `run_monte_carlo` for real. Now called from `api.py`'s background task, which then feeds ATHENA. |
+| **ATHENA** | `backend/athena/agent.py` | ✅ Built, merged from harsh-lal, now called from `api.py` | Two-Schema Pattern — LLM never outputs `safety_score`/`blended_rank`/`is_irreversible`, those are injected/computed after validation. 25/25 tests pass. `api.py` calls `athena_agent.plan(diagnosis, oracle_response)` after ORACLE resolves and broadcasts an `athena_plan` message. |
+| **GUARDIAN** | `backend/guardian/` (`engine.py`, `schemas.py`, `demo.py`, tests) | ✅ Built, its own module, 36/36 tests passing | 5-rule decision tree: `time_to_critical < 5min → AUTONOMOUS_SAFED`; `urgency HIGH/CRITICAL → MANUAL_INTERLOCK`; `recommended option is_irreversible → MANUAL_INTERLOCK`; `safety_score < 0.2 floor → MANUAL_INTERLOCK`; otherwise `AUTOMATED_GUARDED`. More thorough than this doc's original 3-tier sketch. **Not yet called from `api.py`** — the bridge still has its own simpler inline 3-branch version instead of importing this module. Worth swapping in, see §4. |
+| **VITALS** | `backend/vitals/agent.py` | 🟡 Built, wired, one fake entry | See the SENTINEL row above — same module. |
+| **`backend/api.py`** (the bridge) | `backend/api.py` | 🟡 Real, running, closer to feature-complete | Now has: `POST /trigger {fault_name, severity}` (cancels the current stream, starts a new one — the frontend's scenario picker finally has something real to call), CORS middleware, ATHENA wired in, VITALS wired in, lazy `SherlockAgent` init with a graceful no-API-key fallback, `fault_onset=5.0` (near-immediate onset instead of 20% into the run — good for demo pacing). Two bugs found and fixed in the previous merge (timestamp, reverted debounce attempt). One new critical finding this pass — see the 🔴 checklist above: the flagship fault isn't detected within this configuration's actual time budget. |
+| **requirements.txt** | `backend/requirements.txt` | ✅ Built | Added `python-dotenv` this pass (`api.py` now uses it). Install this on whichever laptop runs the demo. |
 
 ---
 
-## 3. What changed in the `api.py` merge — read this before touching it
+## 3. Merge history — what changed and when
 
-Pulled from Meet's `main` branch (which also had a full independent SENTINEL rewrite). Compared file-by-file against our branch before merging — this section is what actually changed, not a changelog dump.
+**2026-09-03, from harsh-lal:** ATHENA (see above). **2026-09-03, from Meet's `main`:** the first version of `api.py`, `engines.py`'s two-engine hybrid, the EPS/ADCS forecasters. Two bugs found and fixed then: a timestamp bug (`datetime.fromtimestamp()` on simulation-elapsed seconds instead of wall-clock time) and a reverted debounce attempt (see the git history in `backend/sentinel/engines.py` if curious about what didn't work).
 
-**Two real bugs found by reading + testing, fixed during merge:**
-
-1. **Timestamp bug.** `SimulatorTelemetryProvider.get_subsystem_snapshot()` and the SHERLOCK diagnosis call both did `datetime.fromtimestamp(frame.timestamp, tz=timezone.utc)` — but `frame.timestamp` is *simulation-elapsed seconds* (0.0 → 600.0), not a Unix epoch offset. That produces timestamps near 1970-01-01, not "now." Fixed: both now use `datetime.now(timezone.utc)`, since what actually matters for a live-streaming demo is the real wall-clock time the frame was processed.
-
-2. **Engine B false-positive rate, tried a fix, reverted it.** See the SENTINEL table row above. Documented in `api.py` itself with a comment explaining exactly why a naive fix is wrong, so nobody re-introduces it under time pressure.
-
-**Two known gaps, not fixed yet — deliberately, this needs real design time, not a rushed patch:**
-
-1. **`api.py` hardcodes `fault_scenario = "eps_cascade_power_failure"` at startup** and runs it once. There is no code path that reads a fault selection from the frontend at all — `websocket_endpoint()` receives incoming text and discards it (`data = await websocket.receive_text()`, never parsed). The frontend's scenario picker (3 cards + severity slider) has nothing to actually call yet. **This is the single most important thing to build next** — a `POST /trigger {fault, severity}` endpoint (or a parsed WS message) that starts `simulate_stream()` with the frontend's actual selection, replacing the hardcoded fault. Also: `eps_cascade_power_failure` is one of the 3 *weak-signal* faults from §1 — the current hardcoded demo is running the fault least likely to visibly trigger. Swap the hardcoded default to `tcs_thermal_runaway` immediately, even before the picker is wired.
-
-2. **ATHENA is not called anywhere in `api.py`.** The pipeline currently stops at GUARDIAN. Given ATHENA is done and tested (§2), wiring it in is small: after the ORACLE background task resolves, call `AthenaAgent().plan(sherlock_diagnosis, oracle_response)` and broadcast `.to_ws_message()`. Should take under an hour.
+**2026-09-04, from harsh-lal (now containing Meet's latest `main` merged in too):** `POST /trigger`, ATHENA + VITALS wired into `api.py`, the full GUARDIAN module, and the `PhysicsSpikeFilter` debounce attempt. This is the pass that found the flagship-fault timing bug and the VITALS fake-detection entry — both documented in §2 and the checklist at the top of this file. All three team branches (`mohit-rawat`, `harsh-lal`, `main`) are synced to the same commit as of this pass — `main`'s separate v2 TypeScript frontend (46 files, unrelated architecture) was confirmed abandoned and removed in that sync, by explicit confirmation, not by default.
 
 ---
 
 ## 4. What's next — in priority order
 
-1. **Wire the frontend to the real `api.py`.** This is the actual #1 blocker — everything above this line is real, working backend code that nobody outside a Python REPL can see yet. Concretely:
-   - Add a `POST /trigger` endpoint to `api.py` that accepts `{fault, severity}` and starts a `simulate_stream()` run for that specific fault (currently hardcoded).
-   - Replace `src/App.jsx`'s `FAULT_SCENARIOS` mock object with a real `WebSocket('ws://localhost:8000/ws')` connection; map incoming `{type: "telemetry"|"sentinel_alert"|"sherlock_diagnosis"|"guardian_action"|"oracle_simulation"}` messages onto the existing `scenarioPhase` state machine — the phase names already line up closely with what `api.py` broadcasts.
-   - Swap the hardcoded fault to `tcs_thermal_runaway` as an immediate stopgap even before the picker is wired end-to-end.
-2. **Wire ATHENA into `api.py`** (see §3 — small, well-scoped, already tested).
-3. **Fix Engine B's debounce properly.** Not a consecutive-steps filter (tried, reverted — kills real signal). Try a rolling event-count window (e.g., "≥2 raw spike flags within any 20-30 step window") and *actually measure it* against all 6 faults + nominal before shipping, the same way every other claim in this doc was verified. Budget real time for this — it's a tuning problem, not a one-line fix.
-4. **VITALS + CHRONICLE** — no LLM, cheap, straightforward functions over the same `SatelliteState` stream `api.py` already has:
-   ```python
-   def compute_health_score(state) -> dict:
-       battery_score = state.eps.battery_soc * 100
-       thermal_score = max(0, 100 - abs(state.tcs.panel_temp - 25) * 2)
-       cpu_score = (1 - state.obc.cpu_load) * 100
-       comms_score = (1 - state.ttc.bit_error_rate) * 100
-       overall = battery_score*0.35 + thermal_score*0.25 + cpu_score*0.20 + comms_score*0.20
-       return {"overall_score": round(overall, 1), "rul_orbits": compute_rul(state)}
-   ```
-5. **Pull GUARDIAN's inline logic into `backend/guardian.py`** as its own module (it's already correct, just embedded in `simulate_stream()` — extracting it is almost pure copy-paste, and makes it independently testable).
-6. **QUARTERMASTER** — mostly static: 2 hardcoded ground-station passes, offload rule on HIGH/CRITICAL severity. Lowest judge-value agent, don't over-invest.
-7. **SCRIBE** — Jinja2 template over the full pipeline output → markdown runbook. One small LLM call for a 2-sentence executive summary; everything else plain templating (reliability > cleverness in front of judges).
-8. **Consolidate the duplicate `SimulatorTelemetryProvider`** (§2) onto one implementation. Low priority, doesn't block anything.
-9. **Wire Meet's EPS/ADCS forecasters (`eps_tcs.py`/`adcs.py`) as a real Engine C**, once Engine B's debounce is solid — this is real, trained, working forecast-residual capability that's currently sitting unused. Worth doing specifically because it's the Telemanom-style approach `audit_findings.md` recommended as the *right* fix for slow-ramp faults, and someone already built the training pipeline for it.
-10. **Re-tune the other 3 faults** in `faults.py` (`eps_battery_degradation`, `adcs_reaction_wheel_degradation`, `eps_cascade_power_failure`) so all 6 are demo-viable, not just 3.
+1. **Fix the flagship-fault timing bug (🔴, top of file).** `tcs_thermal_runaway` is undetected within `api.py`'s real 600s run. Three options, pick one rather than guessing:
+   - Cheapest: lower `calculate_vitals()`'s `tcs_score` panel_temp threshold from 85°C to something realistic for a 10-minute demo window — e.g. our `engine_b.py`'s own calibrated 55°C warn line (already measured against this exact simulator, see `audit_findings.md`). Re-measure afterward, same way every other number in this doc was measured — don't just lower the number and assume it works.
+   - More correct: increase `tcs_thermal_runaway`'s ramp rate in `faults.py` so panel_temp reaches a real threshold within ~5-8 minutes at severity 0.7-1.0 instead of the ~40 minutes it currently needs. This also fixes it for anyone who later extends `duration` past 600s.
+   - Fallback: wire `engine_b.py` into `api.py` as an additional real-time check *alongside* VITALS and the spike filter (currently it isn't imported by `api.py` at all) — belt-and-suspenders, catches it if either of the above isn't done in time.
+2. **Fix or remove the fake VITALS entry for `eps_cascade_power_failure`.** Either derive its detection from a real threshold (bus_voltage crossing the roadmap's calibrated line, same table `engine_b.py` already uses) or stop claiming this fault is "detected" in demo narration — currently it's a label lookup dressed up as detection.
+3. **Wire the frontend to the real `api.py`.** Still the #1 *visibility* blocker — everything in §2 above the frontend row is real, tested backend code nobody outside a terminal can see yet. `POST /trigger` now exists; replace `src/App.jsx`'s `FAULT_SCENARIOS` mock with a real `WebSocket('ws://localhost:8000/ws')` and a `fetch('/trigger', {method:'POST', body: {fault_name, severity}})` call. Map incoming `{type: "telemetry"|"sentinel_alert"|"sherlock_diagnosis"|"guardian_action"|"oracle_simulation"|"athena_plan"|"vitals_update"}` onto the existing `scenarioPhase` state machine — the phase names already line up closely.
+4. **Swap `api.py`'s inline GUARDIAN 3-branch logic for the real `backend/guardian/` module** (36/36 tests, 5 rules, more thorough than the inline version). Small, mechanical change.
+5. **Properly fix Engine B's spike-detector debounce.** The rolling event-count window helped (raw alarm count is down) but hasn't solved fault-vs-nominal separation yet (§2). Try widening the window further, or requiring spikes across *multiple different channels* rather than counting repeats on one, and measure against all 6 faults + nominal before calling it done.
+6. **CHRONICLE** — no LLM, cheap: watch the same telemetry/vitals stream `api.py` already broadcasts, print a formatted line whenever a threshold crosses or another agent produces output.
+7. **QUARTERMASTER** — mostly static: 2 hardcoded ground-station passes, offload rule on HIGH/CRITICAL severity. Lowest judge-value agent, don't over-invest.
+8. **SCRIBE** — Jinja2 template over the full pipeline output → markdown runbook. One small LLM call for a 2-sentence executive summary; everything else plain templating (reliability > cleverness in front of judges).
+9. **Consolidate the duplicate `SimulatorTelemetryProvider`** (§2) onto one implementation. Low priority, doesn't block anything.
+10. **Wire Meet's EPS/ADCS forecasters (`eps_tcs.py`/`adcs.py`) as a real Engine C**, once items 1-2 are solid — real, trained, working forecast-residual capability that's currently sitting unused.
+11. **Re-tune the other weak faults** (`eps_battery_degradation`, `adcs_reaction_wheel_degradation`) in `faults.py` so more than 3 are demo-viable.
 
 ---
 
@@ -189,9 +175,9 @@ aero_astra/
 ├── backend/
 │   ├── api.py                    ✅ EXISTS — real WebSocket bridge, see §3 for open gaps
 │   ├── requirements.txt          ✅ EXISTS
-│   ├── vitals.py                 ← BUILD §4.4
+│   ├── vitals/                   ✅ EXISTS — agent.py, wired into api.py (one fake entry, §2)
 │   ├── chronicle.py              ← BUILD §4.4
-│   ├── guardian.py               ← EXTRACT from api.py, §4.5
+│   ├── guardian/                 ✅ EXISTS — 36/36 tests, not yet imported by api.py (§4.4)
 │   ├── quartermaster.py          ← BUILD §4.6
 │   ├── scribe.py                 ← BUILD §4.7
 │   ├── athena/                   ✅ EXISTS — not yet called by api.py, §3
