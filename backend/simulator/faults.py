@@ -199,7 +199,9 @@ def get_fault_modifiers(
     # ── TCS thermal runaway ───────────────────────────────────────────────────
     elif fault_name == "tcs_thermal_runaway":
         # Primary: heat pipe failure — push target temp up, reduce cooling
-        mods["tcs"]["tcs_target_temp_delta"] = 50.0 * eff
+        # Pushed from 50.0 to 350.0 so the 10-minute thermal time constant 
+        # produces a fast enough gradient to trigger the 49°C alarm within ~5s
+        mods["tcs"]["tcs_target_temp_delta"] = 350.0 * eff
         mods["tcs"]["tcs_cooling_factor"] = 1.0 - 0.8 * eff
 
         # Cascades via TCS→* thermal_stress / thermal_feedback edges

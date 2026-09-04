@@ -6,6 +6,7 @@ import PillNav from './components/PillNav';
 import AgentNav from './components/AgentNav';
 import AgentDetailPage from './components/AgentDetailPage';
 import BorderGlow from './components/BorderGlow';
+import TargetCursor from './components/TargetCursor';
 import './index.css';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -271,6 +272,10 @@ function App() {
   // ref is kept in sync on every launch/reset so the WS-driven auto-execute
   // path always reads the real current scenario.
   const activeScenarioRef = useRef(null);
+  // Tracks the last worst_health seen so CHRONICLE can log the exact moment
+  // it crosses the SENTINEL fallback threshold (0.85), not just repeat the
+  // sentinel_alert line — a real threshold-cross event, not a duplicate.
+  const lastWorstHealthRef = useRef(1.0);
   const [backendOnline, setBackendOnline] = useState(false);
   const [backendData, setBackendData] = useState({
     sentinel: null,    // { triggered_engine, timestamp }
@@ -314,9 +319,25 @@ function App() {
             case 'telemetry':
               setBackendData(prev => ({ ...prev, telemetry: msg }));
               break;
-            case 'vitals_update':
+            case 'vitals_update': {
               setBackendData(prev => ({ ...prev, vitals: msg.payload }));
+              const worst = msg.payload?.worst_health;
+              const prevWorst = lastWorstHealthRef.current;
+              if (typeof worst === 'number') {
+                if (prevWorst >= 0.85 && worst < 0.85) {
+                  const subsystem = ['eps_health', 'tcs_health', 'adcs_health', 'ttc_health']
+                    .reduce((a, b) => (msg.payload[a] ?? 1) <= (msg.payload[b] ?? 1) ? a : b)
+                    .replace('_health', '').toUpperCase();
+                  setLogs(prev => [...prev,
+                    `> ⚠ VITALS: ${subsystem} health crossed below warning threshold (${(worst * 100).toFixed(0)}%).`,
+                  ]);
+                } else if (prevWorst < 0.85 && worst >= 0.85) {
+                  setLogs(prev => [...prev, `> VITALS: All subsystems back above threshold (worst ${(worst * 100).toFixed(0)}%).`]);
+                }
+                lastWorstHealthRef.current = worst;
+              }
               break;
+            }
             case 'sentinel_alert':
               setBackendData(prev => ({ ...prev, sentinel: msg }));
               setScenarioPhase('detected');
@@ -421,6 +442,7 @@ function App() {
     setSelectedMitigation(1);
     setActiveScenario(null);
     activeScenarioRef.current = null;
+    lastWorstHealthRef.current = 1.0;
     setActiveSeverity(null);
     setGuardianTier(null);
     setShowDiff(false);
@@ -445,6 +467,7 @@ function App() {
     setShowScenarioPicker(false);
     setActiveScenario(scenario);
     activeScenarioRef.current = scenario;
+    lastWorstHealthRef.current = 1.0;
     setActiveSeverity(severity);
     setShowDiff(false);
     // Reset any previous backend data from the last run
@@ -705,7 +728,7 @@ function App() {
       </div>
 
       <BorderGlow borderRadius={4} glowRadius={26} fillOpacity={0.25} className="launch-btn-glow">
-        <button className="launch-btn" onClick={handleLaunch} id="launch-mission-control">
+        <button className="launch-btn cursor-target" onClick={handleLaunch} id="launch-mission-control">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0 }}>
             <circle cx="12" cy="12" r="10" />
             <line x1="22" y1="12" x2="18" y2="12" />
@@ -716,6 +739,8 @@ function App() {
           LAUNCH MISSION CONTROL
         </button>
       </BorderGlow>
+      
+      <TargetCursor targetSelector=".cursor-target" cursorColor="#EDEEF2" cursorColorOnTarget="#00FF88" spinDuration={2} />
 
       {/* Coordinate corner decoration */}
       <div style={{

@@ -68,18 +68,26 @@ def calculate_vitals(state) -> dict:
         adcs_score -= (abs(wheel) - 5000.0) * 0.0002
     adcs_score = max(0.0, min(1.0, adcs_score))
 
+    # 4. TT&C Health — signal dropout below lock threshold (-90 dBm)
+    sig = state.ttc.signal_strength
+    ttc_score = 1.0
+    if sig < -90.0:
+        ttc_score -= (-90.0 - sig) * 0.05
+    ttc_score = max(0.0, min(1.0, ttc_score))
+
     # Overall system health: mean, for display (VITALS agent page).
-    system_health = (eps_score + tcs_score + adcs_score) / 3.0
+    system_health = (eps_score + tcs_score + adcs_score + ttc_score) / 4.0
     # Worst subsystem: for the anomaly-trigger fallback in api.py. Averaging
     # masks a single degraded subsystem (a fully-failed TCS with healthy
     # EPS/ADCS averages out to 0.67, not obviously anomalous) — the trigger
-    # should react to the worst subsystem, not the mean of all three.
-    worst_health = min(eps_score, tcs_score, adcs_score)
+    # should react to the worst subsystem, not the mean of all.
+    worst_health = min(eps_score, tcs_score, adcs_score, ttc_score)
 
     return {
         "eps_health": eps_score,
         "tcs_health": tcs_score,
         "adcs_health": adcs_score,
+        "ttc_health": ttc_score,
         "system_health": system_health,
         "worst_health": worst_health,
     }
