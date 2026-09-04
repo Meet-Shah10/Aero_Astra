@@ -90,7 +90,7 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_TEMPERATURE = 0.15
 
 # Longer than SHERLOCK: 3 options × ~5 steps + reasoning_cot + narratives
-DEFAULT_MAX_TOKENS  = 4096              # enough for full RecoveryPlan JSON
+DEFAULT_MAX_TOKENS  = 2048              # fits within OpenRouter free-tier credit balance
 DEFAULT_MAX_RETRIES = 3
 
 # Valid operator effort strings (for schema validation)
