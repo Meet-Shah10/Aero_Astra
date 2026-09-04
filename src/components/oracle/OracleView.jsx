@@ -134,7 +134,13 @@ function ResultView({ completedActions, winnerSummary, outcomeDistribution, socT
       </div>
 
       {/* Bottom row: distribution | SOC chart | metrics */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1.45fr 1.1fr', gap: 14 }}>
+      {/* Key on selectedActionName forces Framer Motion initial→animate to re-run
+          when the user clicks a different action row. Without this, animated bars
+          in OutcomeDistributionCard only animate on first mount, never on update. */}
+      <div
+        key={selectedActionName}
+        style={{ display: 'grid', gridTemplateColumns: '1.5fr 1.45fr 1.1fr', gap: 14 }}
+      >
         <div className="oracle-card">
           <OutcomeDistributionCard
             distribution={currentDistribution}
