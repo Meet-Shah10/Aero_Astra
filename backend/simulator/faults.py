@@ -182,6 +182,10 @@ def get_fault_modifiers(
         # Primary: reduces effective capacity and adds internal-resistance load
         mods["eps"]["eps_capacity_factor"] = 1.0 - 0.6 * eff
         mods["eps"]["eps_load_delta"] = 1.5 * eff  # internal resistance extra load
+        # Rising internal resistance sags terminal voltage under load —
+        # independent of the slower SOC integration, since a degraded cell
+        # can read a healthy SOC while still failing to hold bus voltage.
+        mods["eps"]["eps_voltage_sag"] = 8.0 * eff
 
         # Cascades via EPS→* power_supply edges, scaled by how depleted the battery is
         undervoltage_factor = eff * (1.0 - current_battery_soc)
@@ -217,8 +221,10 @@ def get_fault_modifiers(
 
     # ── ADCS reaction wheel degradation ──────────────────────────────────────
     elif fault_name == "adcs_reaction_wheel_degradation":
-        # Primary: wheel torque efficiency drops
-        mods["adcs"]["adcs_wheel_efficiency"] = 1.0 - 0.9 * eff
+        # Primary: wheel torque efficiency drops. Squared falloff so the
+        # steady-state attitude error (DRIFT_RATE / (WHEEL_GAIN * efficiency))
+        # clears the 5deg alert line at demo severities, not just at eff=1.0.
+        mods["adcs"]["adcs_wheel_efficiency"] = max(0.01, (1.0 - eff) ** 2)
 
         # Cascades via ADCS→* attitude_effect / pointing edges
         # These are handled automatically in the transition functions:

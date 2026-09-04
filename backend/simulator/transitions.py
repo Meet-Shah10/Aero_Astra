@@ -205,8 +205,11 @@ def step_eps(
     d_soc = (net_current * dt) / effective_capacity_as
     new_soc = _clamp(state.eps.battery_soc + d_soc, 0.0, 1.0)
 
-    # Bus voltage: linear model
-    new_voltage = _clamp(_BUS_V_OFFSET + _BUS_V_RANGE * new_soc, 0.0, 36.0)
+    # Bus voltage: linear SOC model, minus any direct sag from rising
+    # internal resistance under load (e.g. eps_battery_degradation) — a
+    # term the SOC integration alone can't represent.
+    voltage_sag = fault_mods.get("eps_voltage_sag", 0.0) + recovery_mods.get("eps_voltage_sag", 0.0)
+    new_voltage = _clamp(_BUS_V_OFFSET + _BUS_V_RANGE * new_soc - voltage_sag, 0.0, 36.0)
 
     return EPSState(
         battery_soc=new_soc,

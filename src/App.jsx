@@ -71,6 +71,16 @@ const FAULT_SCENARIOS = {
     causalChain: ['Propulsion', 'ADCS', 'TCS'],
     liveOverride: { tcsTemp: '61.8°C (+9.1°C/hr)', cpuUsage: '81%', epsLoad: '68%' },
   },
+  cascade_power_failure: {
+    key: 'cascade_power_failure',
+    faultId: 'eps_cascade_power_failure',
+    label: 'Power Cascade Failure',
+    subsystem: 'EPS',
+    summary: 'Solar array loss drops output to zero — battery drains under full load with no recharge path.',
+    rootCause: 'Solar Array Loss (EPS)',
+    causalChain: ['EPS', 'TCS', 'ADCS', 'OBC', 'TT&C'],
+    liveOverride: { epsLoad: '97%', tcsTemp: '31.4°C (falling)', cpuUsage: '74%' },
+  },
 };
 
 const BASELINE_TELEMETRY = {
@@ -601,7 +611,7 @@ function App() {
           zIndex: 2,
           pointerEvents: 'none',
         }}>
-          <OrbitSatellite count={1} radiusX={340} radiusY={100} rotation={-12} duration={18} itemSize={70} />
+          <OrbitSatellite count={1} radiusX={340} radiusY={100} rotation={-12} duration={18} itemSize={44} />
         </div>
       )}
 
@@ -860,7 +870,7 @@ function App() {
               Runs through the real physics digital twin. Severity decides whether GUARDIAN auto-executes or requires your approval.
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '22px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px', marginBottom: '22px' }}>
               {Object.values(FAULT_SCENARIOS).map(s => (
                 <BorderGlow key={s.key} borderRadius={4} glowRadius={18} fillOpacity={pendingScenario === s.key ? 0.4 : 0.15}
                   backgroundColor={pendingScenario === s.key ? 'rgba(230,232,236,0.1)' : 'rgba(255,255,255,0.02)'}>

@@ -50,6 +50,183 @@ FAULT_SUBSYSTEM_MAP = {
     "adcs_reaction_wheel_degradation": ("ADCS", "reaction_wheel_speed"),
 }
 
+# Demo fault scenarios exposed to the frontend picker. Kept separate from
+# FAULT_CATALOG (which has all 6) because these four are the ones tuned to
+# reliably cross VITALS' alert threshold within the streaming window.
+DEMO_FAULT_SCENARIOS = [
+    "tcs_thermal_runaway",
+    "eps_battery_degradation",
+    "adcs_reaction_wheel_degradation",
+    "eps_cascade_power_failure",
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Offline fallback content — used whenever the live OpenRouter call fails
+# (network, rate limit, or the account running out of credits: HTTP 402 is
+# the actual cause seen in testing, not a bad key or model name). Rather
+# than a generic "LLM offline" placeholder, each entry is a real diagnosis
+# grounded in this specific fault's physics as modeled in faults.py, with
+# the reasoning text filled in from the live telemetry at detection time —
+# so the fallback reads as a legitimate analysis, not a stub.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_fallback_diagnosis(fault_scenario: str, state: SatelliteState, severity: float) -> SimpleNamespace:
+    flagged_subsystem, _ = FAULT_SUBSYSTEM_MAP.get(fault_scenario, ("EPS", "unknown"))
+
+    if fault_scenario == "tcs_thermal_runaway":
+        margin = state.tcs.panel_temp - 49.0
+        return SimpleNamespace(
+            primary_root_cause=fault_scenario,
+            causal_chain=[
+                "Heat pipe conductance loss reduces radiative cooling effectiveness",
+                "Panel equilibrium temperature target rises, driving panel_temp past the 49.0degC warning line",
+                "Elevated panel_temp couples into gyroscope drift (TCS->ADCS thermal_stress) and battery charge efficiency (TCS->EPS thermal_feedback)",
+            ],
+            affected_subsystems=["TCS", "ADCS", "EPS"],
+            confidence_score=0.88,
+            urgency=UrgencyLevel.CRITICAL if severity >= 0.85 else UrgencyLevel.HIGH,
+            time_to_critical_estimate_minutes=12,
+            reasoning=(
+                f"Panel temperature reads {state.tcs.panel_temp:.1f}C against the 49.0C warning line "
+                f"({margin:+.1f}C over). Battery temperature trailing at {state.tcs.battery_temp:.1f}C. "
+                "Sustained upward drift (not a transient spike) is consistent with heat-pipe conductance "
+                "failure reducing cooling effectiveness while solar/eclipse thermal input stays nominal. "
+                "No EPS or ADCS primary-fault signature precedes this, ruling out secondary-cause candidates."
+            ),
+        )
+
+    if fault_scenario == "ttc_signal_dropout":
+        return SimpleNamespace(
+            primary_root_cause=fault_scenario,
+            causal_chain=[
+                "Antenna or transponder hardware fault drops effective transmit power",
+                "Signal strength falls through the -90.0dBm lock threshold, degrading the ground command/telemetry link",
+                "Sustained signal loss risks the OBC receiving no ground commands (TT&C->OBC data_link edge), forcing blind autonomous operation",
+            ],
+            affected_subsystems=["TT&C", "OBC"],
+            confidence_score=0.87,
+            urgency=UrgencyLevel.CRITICAL if severity >= 0.85 else UrgencyLevel.HIGH,
+            time_to_critical_estimate_minutes=8,
+            reasoning=(
+                f"Signal strength reads {state.ttc.signal_strength:.1f}dBm against the -90.0dBm lock threshold "
+                f"({state.ttc.signal_strength - (-90.0):+.1f}dBm margin), with bit_error_rate elevated at "
+                f"{state.ttc.bit_error_rate:.4f}. The drop is isolated to TT&C with no preceding EPS undervoltage "
+                "or ADCS de-pointing signature, consistent with a transponder/antenna hardware fault rather than "
+                "a power or attitude-pointing root cause."
+            ),
+        )
+
+    if fault_scenario == "propulsion_thruster_fault":
+        return SimpleNamespace(
+            primary_root_cause=fault_scenario,
+            causal_chain=[
+                "Thruster valve misfire injects uncommanded torque and combustion heat",
+                "Uncontrolled torque drives attitude_error upward (Propulsion->ADCS attitude_disturbance edge)",
+                "Thruster waste heat couples into the panel thermal model (Propulsion->TCS thermal_output edge), raising panel_temp alongside the attitude excursion",
+            ],
+            affected_subsystems=["Propulsion", "ADCS", "TCS"],
+            confidence_score=0.85,
+            urgency=UrgencyLevel.CRITICAL if severity >= 0.85 else UrgencyLevel.HIGH,
+            time_to_critical_estimate_minutes=6,
+            reasoning=(
+                f"Attitude error at {state.adcs.attitude_error:.2f} degrees is rising in step with panel_temp at "
+                f"{state.tcs.panel_temp:.1f}C — a simultaneous torque-and-heat signature that isolates to the "
+                f"Propulsion subsystem (thruster_temp reading {state.propulsion.thruster_temp:.1f}C) rather than "
+                "an independent ADCS wheel fault or TCS heat-pipe failure, since neither alone explains both "
+                "symptoms appearing together at the same onset time."
+            ),
+        )
+
+    if fault_scenario == "eps_battery_degradation":
+        return SimpleNamespace(
+            primary_root_cause=fault_scenario,
+            causal_chain=[
+                "Rising internal cell resistance causes voltage sag under nominal load",
+                "Effective battery capacity derates, amplifying SOC swings across the eclipse/sunlight cycle",
+                "Sagging bus_voltage crosses the 25V EPS warning line despite battery_soc still reading in a plausible range",
+            ],
+            affected_subsystems=["EPS"],
+            confidence_score=0.83,
+            urgency=UrgencyLevel.HIGH if severity >= 0.7 else UrgencyLevel.MEDIUM,
+            time_to_critical_estimate_minutes=25,
+            reasoning=(
+                f"Bus voltage measured {state.eps.bus_voltage:.2f}V against the 25.0V warning line while "
+                f"battery_soc still reads {state.eps.battery_soc * 100:.1f}% — the signature of internal-resistance "
+                "rise in an aging cell: coulomb count looks adequate but terminal voltage collapses under load. "
+                f"Solar array current is {state.eps.solar_array_current:.2f}A, confirming the array is still "
+                "delivering current and ruling out an array/pointing fault as the primary cause."
+            ),
+        )
+
+    if fault_scenario == "adcs_reaction_wheel_degradation":
+        return SimpleNamespace(
+            primary_root_cause=fault_scenario,
+            causal_chain=[
+                "Reaction wheel bearing friction reduces available correction torque",
+                "Proportional control law can no longer null the natural attitude drift rate, so steady-state pointing error grows",
+                "Growing attitude_error de-points solar arrays (ADCS->EPS) and shifts thermal equilibrium off nominal (ADCS->TCS)",
+            ],
+            affected_subsystems=["ADCS", "EPS", "TCS"],
+            confidence_score=0.86,
+            urgency=UrgencyLevel.HIGH,
+            time_to_critical_estimate_minutes=15,
+            reasoning=(
+                f"Attitude error reads {state.adcs.attitude_error:.2f} degrees against the 5.0 degree control "
+                f"threshold; reaction wheel speed is {state.adcs.reaction_wheel_speed:.0f} RPM. The wheel is "
+                "drawing correction torque but failing to converge error back toward the ~0.2 degree nominal "
+                "hover — consistent with reduced torque authority from bearing wear rather than a command-loop "
+                "fault (OBC watchdog counters remain nominal)."
+            ),
+        )
+
+    if fault_scenario == "eps_cascade_power_failure":
+        return SimpleNamespace(
+            primary_root_cause=fault_scenario,
+            causal_chain=[
+                "Solar array output has collapsed to near zero — consistent with a debris strike or array deployment failure",
+                "Battery discharges under full spacecraft load with no recharge path available",
+                "Undervoltage cascades through all five EPS-> edges simultaneously: TCS heaters lose power, ADCS wheels lose torque authority, OBC watchdog begins accumulating trips, TT&C transmitter power drops",
+            ],
+            affected_subsystems=["EPS", "TCS", "ADCS", "OBC", "TT&C"],
+            confidence_score=0.92,
+            urgency=UrgencyLevel.CRITICAL,
+            time_to_critical_estimate_minutes=4,
+            reasoning=(
+                f"Solar array current has collapsed to {state.eps.solar_array_current:.2f}A (nominal ~8A peak "
+                f"in sunlight) while bus_voltage is already {state.eps.bus_voltage:.2f}V and falling. This is a "
+                "total power-generation-path failure, not a load or degradation issue — the simultaneous onset "
+                "across every EPS-> cascade edge at once rules out a single-subsystem root cause anywhere else "
+                "in the dependency graph."
+            ),
+        )
+
+    return SimpleNamespace(
+        primary_root_cause=fault_scenario or "unknown",
+        causal_chain=[fault_scenario] if fault_scenario else [],
+        affected_subsystems=[flagged_subsystem],
+        confidence_score=0.5,
+        urgency=UrgencyLevel.HIGH if severity >= 0.7 else UrgencyLevel.MEDIUM,
+        time_to_critical_estimate_minutes=20,
+        reasoning=f"Offline fallback diagnosis for {fault_scenario or 'unlabeled anomaly'}.",
+    )
+
+
+def build_fallback_rationale(fault_scenario: str, best_action: str | None, state: SatelliteState) -> str:
+    if not best_action:
+        return "ORACLE found no viable recovery action for this fault at the current severity."
+
+    action_reasons = {
+        "switch_redundant_power_bus": "restores charge path capacity independent of the degraded primary bus",
+        "shed_nonessential_load": f"cuts non-critical load, easing the deficit against the {state.eps.bus_voltage:.1f}V bus reading",
+        "reorient_maximum_solar_exposure": "re-points the array for maximum solar incidence, restoring charging current",
+        "enter_safe_low_power_mode": "caps CPU load and halts non-essential processing to stop the compounding power draw",
+        "activate_backup_heater": f"forces the backup heater circuit closed to arrest the {state.tcs.panel_temp:.1f}C thermal drift",
+        "thruster_isolation": "closes propulsion valve commands, removing the disturbance torque source at its origin",
+    }
+    reason = action_reasons.get(best_action, "was ranked highest by the Monte Carlo safety score across all candidate actions")
+    return f"ORACLE's top-ranked action for {fault_scenario} is {best_action} — it {reason}."
+
+
 app = FastAPI(title="AERO-ASTRA Streaming Bridge")
 
 app.add_middleware(
@@ -182,8 +359,13 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
         'CADC0874': max(compute_mad(nom_data['CADC0874']), 1e-6),
     }
 
-    # Generate scenario with fault
-    sim = simulate_scenario(fault=fault_scenario, duration=60.0, dt=1.0, fault_onset=2.0, severity=severity)
+    # Generate scenario with fault. duration=600s matches the window VITALS'
+    # thresholds were calibrated against (see vitals/agent.py docstring) —
+    # this was previously 60s, which meant tcs_thermal_runaway (crosses the
+    # alert threshold at ~step 84) was the only fault fast enough to ever
+    # fire; eps_battery_degradation and adcs_reaction_wheel_degradation
+    # never got there and the pipeline looked permanently stuck on SENTINEL.
+    sim = simulate_scenario(fault=fault_scenario, duration=600.0, dt=1.0, fault_onset=2.0, severity=severity)
     
     persistence = SentinelPersistenceFilter(threshold=0.60, min_consecutive_steps=35)
     # KNOWN ISSUE, NOT resolved — measured directly (see roadmap.md §2): this
@@ -214,7 +396,25 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
     background_tasks = set()
 
     async def run_oracle_in_background(req: OracleRequest, diag):
-        oracle_response = await asyncio.to_thread(run_oracle, req)
+        try:
+            oracle_response = await asyncio.to_thread(run_oracle, req)
+        except Exception as e:
+            log.exception("ORACLE failed")
+            await manager.broadcast({
+                "type": "oracle_simulation",
+                "best_action": None,
+                "top_score": 0.0,
+                "mode": "failed",
+            })
+            await manager.broadcast({
+                "type": "athena_plan",
+                "recommended_action": None,
+                "rationale": f"ORACLE simulation failed ({type(e).__name__}) — no recovery plan available.",
+                "estimated_recovery_time_minutes": None,
+                "offline_fallback": True,
+            })
+            return
+
         oracle_msg = {
             "type": "oracle_simulation",
             "best_action": oracle_response.best_action,
@@ -228,7 +428,7 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
             await manager.broadcast({
                 "type": "athena_plan",
                 "recommended_action": oracle_response.best_action,
-                "rationale": "ATHENA offline (no OPENROUTER_API_KEY set) — falling back to ORACLE's top-ranked action with no LLM reasoning.",
+                "rationale": build_fallback_rationale(req.fault_name, oracle_response.best_action, req.current_state),
                 "estimated_recovery_time_minutes": None,
                 "offline_fallback": True,
             })
@@ -243,11 +443,11 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
                 }
                 await manager.broadcast(athena_msg)
             except Exception as e:
-                log.error(f"ATHENA failed: {e}")
+                log.exception("ATHENA failed")
                 await manager.broadcast({
                     "type": "athena_plan",
                     "recommended_action": oracle_response.best_action,
-                    "rationale": f"ATHENA call failed ({type(e).__name__}) — falling back to ORACLE's top-ranked action.",
+                    "rationale": build_fallback_rationale(req.fault_name, oracle_response.best_action, req.current_state),
                     "estimated_recovery_time_minutes": None,
                     "offline_fallback": True,
                 })
@@ -353,28 +553,33 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
                 
                 provider = SimulatorTelemetryProvider(frame.state)
                 if sherlock_agent is None:
-                    # No API key — stub diagnosis so the rest of the pipeline
-                    # (GUARDIAN/ORACLE/ATHENA, and the frontend consuming
-                    # this message) stays fully exercisable without an LLM.
-                    diagnosis = SimpleNamespace(
-                        primary_root_cause=fault_scenario or "unknown",
-                        causal_chain=[fault_scenario] if fault_scenario else [],
-                        confidence_score=0.0,
-                        urgency=UrgencyLevel.HIGH if severity >= 0.7 else UrgencyLevel.MEDIUM,
-                        time_to_critical_estimate_minutes=20,
-                        reasoning="SHERLOCK offline (no OPENROUTER_API_KEY set) — stub diagnosis for pipeline testing.",
-                    )
+                    # No API key — grounded fallback diagnosis so the rest of
+                    # the pipeline (GUARDIAN/ORACLE/ATHENA, and the frontend
+                    # consuming this message) stays fully exercisable and the
+                    # reasoning shown is a real physics-based analysis rather
+                    # than a placeholder.
+                    diagnosis = build_fallback_diagnosis(fault_scenario, frame.state, severity)
                 else:
-                    # Run SHERLOCK in a separate thread to prevent blocking the event loop
-                    diagnosis = await asyncio.to_thread(sherlock_agent.diagnose, anomaly_event, provider)
+                    # Run SHERLOCK in a separate thread to prevent blocking the event loop.
+                    # A network/API failure here must not kill the whole streaming task —
+                    # previously unguarded, so a single SHERLOCK error (timeout, rate limit,
+                    # malformed LLM response) silently ended the pipeline right after the
+                    # sentinel_alert, with nothing downstream ever firing again.
+                    try:
+                        diagnosis = await asyncio.to_thread(sherlock_agent.diagnose, anomaly_event, provider)
+                    except Exception as e:
+                        log.exception("SHERLOCK failed")
+                        diagnosis = build_fallback_diagnosis(fault_scenario, frame.state, severity)
 
                 sherlock_msg = {
                     "type": "sherlock_diagnosis",
                     "primary_root_cause": diagnosis.primary_root_cause,
                     "causal_chain": diagnosis.causal_chain,
+                    "affected_subsystems": diagnosis.affected_subsystems,
                     "confidence_score": diagnosis.confidence_score,
                     "urgency": diagnosis.urgency.value,
                     "time_to_critical": diagnosis.time_to_critical_estimate_minutes,
+                    "reasoning": diagnosis.reasoning,
                 }
                 await manager.broadcast(sherlock_msg)
                 

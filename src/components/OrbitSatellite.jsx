@@ -1,7 +1,3 @@
-/* OrbitSatellite — renders a small 3D satellite GLB model orbiting
-   around the globe on the landing page using CSS offset-path animation.
-   Based on OrbitImages by Dominik Koch, adapted for a single 3D model. */
-
 import { useMemo, useEffect, useLayoutEffect, useRef, useState, Suspense } from 'react';
 import { motion, useMotionValue, useTransform, animate } from 'motion/react';
 import { Canvas, useFrame } from '@react-three/fiber';
@@ -9,16 +5,24 @@ import { useGLTF, Center } from '@react-three/drei';
 import * as THREE from 'three';
 import './OrbitSatellite.css';
 
-/* ── path generators ────────────────────────────────────────────── */
 function generateEllipsePath(cx, cy, rx, ry) {
   return `M ${cx - rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx + rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx - rx} ${cy}`;
 }
 
-/* ── Tiny inline satellite mesh ─────────────────────────────────── */
+// Normalizes the raw GLB to a fixed apparent size so wide geometry (solar
+// panels) can never exceed the square canvas frustum — unlike a flat scale
+// factor, this measures the model's actual bounding sphere first.
 function MiniSatellite({ url }) {
   const { scene } = useGLTF(url);
   const cloned = useMemo(() => scene.clone(true), [scene]);
   const ref = useRef();
+
+  const fitScale = useMemo(() => {
+    const box = new THREE.Box3().setFromObject(cloned);
+    const sphere = box.getBoundingSphere(new THREE.Sphere());
+    // 0.6 = target apparent radius in scene units, leaves margin inside frame
+    return 0.6 / (sphere.radius || 1);
+  }, [cloned]);
 
   useFrame((_, dt) => {
     if (ref.current) ref.current.rotation.y += 0.6 * dt;
@@ -26,28 +30,36 @@ function MiniSatellite({ url }) {
 
   return (
     <group ref={ref}>
-      <Center scale={0.5}>
+      <Center scale={fitScale}>
         <primitive object={cloned} />
       </Center>
     </group>
   );
 }
 
-/* ── Single orbit item ──────────────────────────────────────────── */
-function OrbitItem({ index, totalItems, path, itemSize, rotation, progress }) {
+// Angle mapping: angle = PI + (offset/100)*2*PI
+//   offset 0  -> left  (cx-rx, cy)
+//   offset 25 -> top   (cx, cy-ry)   behind globe
+//   offset 50 -> right (cx+rx, cy)
+//   offset 75 -> bottom (cx, cy+ry)  in front
+function OrbitItem({ index, totalItems, cx, cy, rx, ry, itemSize, rotation, progress }) {
   const itemOffset = (index / totalItems) * 100;
 
-  const offsetDistance = useTransform(progress, (p) => {
+  const x = useTransform(progress, (p) => {
     const offset = (((p + itemOffset) % 100) + 100) % 100;
-    return `${offset}%`;
+    const angle = Math.PI + (offset / 100) * 2 * Math.PI;
+    return cx + rx * Math.cos(angle) - itemSize / 2;
+  });
+
+  const y = useTransform(progress, (p) => {
+    const offset = (((p + itemOffset) % 100) + 100) % 100;
+    const angle = Math.PI + (offset / 100) * 2 * Math.PI;
+    return cy + ry * Math.sin(angle) - itemSize / 2;
   });
 
   const opacity = useTransform(progress, (p) => {
     const offset = (((p + itemOffset) % 100) + 100) % 100;
-    // offset 0 is left, 25 is top(back), 50 is right, 75 is bottom(front)
-    // Globe blocks roughly from offset 6 to 44
     if (offset > 6 && offset < 44) return 0;
-    // Fade out smoothly at the edges
     if (offset > 3 && offset <= 6) return 1 - (offset - 3) / 3;
     if (offset >= 44 && offset < 47) return (offset - 44) / 3;
     return 1;
@@ -55,23 +67,13 @@ function OrbitItem({ index, totalItems, path, itemSize, rotation, progress }) {
 
   const scale = useTransform(progress, (p) => {
     const offset = (((p + itemOffset) % 100) + 100) % 100;
-    // Sinusoidal scaling for 3D depth: smallest at back (25), largest at front (75)
     return 1.0 - 0.3 * Math.sin((offset / 100) * 2 * Math.PI);
   });
 
   return (
     <motion.div
       className="orbit-sat-item"
-      style={{
-        width: itemSize,
-        height: itemSize,
-        offsetPath: `path("${path}")`,
-        offsetRotate: '0deg',
-        offsetAnchor: 'center center',
-        offsetDistance,
-        opacity,
-        scale,
-      }}
+      style={{ width: itemSize, height: itemSize, x, y, opacity, scale }}
     >
       <div style={{ transform: `rotate(${-rotation}deg)`, width: '100%', height: '100%' }}>
         <Canvas
@@ -93,7 +95,6 @@ function OrbitItem({ index, totalItems, path, itemSize, rotation, progress }) {
   );
 }
 
-/* ── Main component ─────────────────────────────────────────────── */
 export default function OrbitSatellite({
   count = 1,
   baseWidth = 900,
@@ -104,7 +105,7 @@ export default function OrbitSatellite({
   itemSize = 80,
 }) {
   const containerRef = useRef(null);
-  const [scale, setScale] = useState(null);
+  const [containerScale, setContainerScale] = useState(null);
 
   const cx = baseWidth / 2;
   const cy = baseWidth / 2;
@@ -118,7 +119,7 @@ export default function OrbitSatellite({
     if (!containerRef.current) return;
     const updateScale = () => {
       if (!containerRef.current) return;
-      setScale(containerRef.current.clientWidth / baseWidth);
+      setContainerScale(containerRef.current.clientWidth / baseWidth);
     };
     updateScale();
     const observer = new ResizeObserver(updateScale);
@@ -139,26 +140,22 @@ export default function OrbitSatellite({
   }, [progress, duration]);
 
   return (
-    <div
-      ref={containerRef}
-      className="orbit-sat-container"
-      aria-hidden="true"
-    >
+    <div ref={containerRef} className="orbit-sat-container" aria-hidden="true">
       <div
         className="orbit-sat-scaling orbit-sat-scaling--responsive"
         style={{
           width: baseWidth,
           height: baseWidth,
-          // Move the orbit up by 60px (or adjust Y translation)
-          transform: scale !== null ? `translate(-50%, calc(-50% - 60px)) scale(${scale})` : undefined,
-          visibility: scale === null ? 'hidden' : undefined,
+          transform: containerScale !== null
+            ? `translate(-50%, calc(-50% - 60px)) scale(${containerScale})`
+            : undefined,
+          visibility: containerScale === null ? 'hidden' : undefined,
         }}
       >
-        <motion.div
+        <div
           className="orbit-sat-rotation"
           style={{ transform: `rotate(${rotation}deg)` }}
         >
-          {/* Orbit ring — subtle dashed ellipse with depth fade */}
           <svg
             width="100%"
             height="100%"
@@ -188,13 +185,16 @@ export default function OrbitSatellite({
               key={i}
               index={i}
               totalItems={count}
-              path={path}
+              cx={cx}
+              cy={cy}
+              rx={radiusX}
+              ry={radiusY}
               itemSize={itemSize}
               rotation={rotation}
               progress={progress}
             />
           ))}
-        </motion.div>
+        </div>
       </div>
     </div>
   );
