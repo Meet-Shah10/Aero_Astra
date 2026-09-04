@@ -57,6 +57,7 @@ def _evaluate_action(action_name: str, request: OracleRequest) -> ActionResult:
         proposed_action=action_name,
         n_runs=request.n_runs,
         steps=request.steps,
+        dt=23.0,  # Simulate 5 hours (300 * 60s) instead of 50m to show realistic fault degradation
         fault=request.fault_name,
         fault_severity=request.fault_severity,
     )

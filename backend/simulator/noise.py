@@ -34,7 +34,7 @@ from .schemas import (
 # Watchdog trips is int — no noise applied (discrete events only).
 
 _EPS_NOISE = {
-    "battery_soc": 0.0005,
+    "battery_soc": 0.004,  # Increased to create spread in Monte Carlo demo
     "solar_array_current": 0.04,
     "bus_voltage": 0.015,
     "load_current": 0.03,
@@ -46,7 +46,7 @@ _TCS_NOISE = {
 }
 
 _ADCS_NOISE = {
-    "attitude_error": 0.04,
+    "attitude_error": 0.2,  # Increased for demo variation
     "reaction_wheel_speed": 2.0,
 }
 

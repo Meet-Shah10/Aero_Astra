@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { gsap } from 'gsap';
 import BorderGlow from './BorderGlow';
+import OracleView from './oracle/OracleView.jsx';
 import ResidualChart from './ResidualChart';
 import './AgentDetailPage.css';
 
@@ -232,38 +233,16 @@ function SherlockPage({ activeScenario, isAnomaly, liveTelemetry }) {
   );
 }
 
+// OraclePage: thin shell — OracleView owns its own state machine and layout.
+// We pass through backendOnline, backendData, and isAnomaly so OracleView
+// can auto-trigger when the backend oracle_simulation WS message arrives.
 function OraclePage({ isAnomaly, backendOnline, backendData }) {
-  if (!isAnomaly) return <Empty label="Standby — no simulation requested." />;
-  const oracle = backendOnline ? backendData?.oracle : null;
-  if (!oracle) return <Empty label="Waiting for SENTINEL/SHERLOCK before simulation can run..." />;
-  const results = oracle.results || [];
   return (
-    <>
-      <p className="agent-page-lede">100 independent Monte Carlo runs per candidate action against the physics digital twin.</p>
-      <div className="live-data-badge" style={{ marginBottom: 12 }}>
-        ● LIVE — backend/oracle/agent.py — best_action={oracle.best_action}, top_score={oracle.top_score?.toFixed(2)}, mode={oracle.mode}
-      </div>
-      <div className="oracle-bars">
-        {results.length === 0 && (
-          <div className="text-muted" style={{ fontSize: 11 }}>No candidate actions returned by ORACLE for this fault.</div>
-        )}
-        {results.map(r => {
-          const pct = Math.round(r.nominal_recovery_rate * 100);
-          const bad = r.mission_loss_rate > 0.15;
-          return (
-            <div className="oracle-bar-row" key={r.action_name}>
-              <span>{r.action_name.replaceAll('_', ' ')}</span>
-              <div className="oracle-bar">
-                <div className={`oracle-bar-fill ${bad ? 'oracle-bar-fill--bad' : ''}`} style={{ width: `${pct}%` }} />
-              </div>
-              <span className={bad ? 'text-red' : 'text-green'}>
-                {pct}% recovery{r.mission_loss_rate > 0 ? ` · ${Math.round(r.mission_loss_rate * 100)}% loss risk` : ''}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-    </>
+    <OracleView
+      isAnomaly={isAnomaly}
+      backendOnline={backendOnline}
+      backendData={backendData}
+    />
   );
 }
 
@@ -453,6 +432,16 @@ const AGENT_META = {
 
 export default function AgentDetailPage({ agent, ...props }) {
   const meta = AGENT_META[agent];
+
+  // ORACLE owns its full layout — no standard header/body wrapping
+  if (agent === 'ORACLE') {
+    return (
+      <div className="agent-page agent-page--oracle fade-enter">
+        <OraclePage {...props} />
+      </div>
+    );
+  }
+
   return (
     <div className="agent-page fade-enter">
       <div className="agent-page-header">
@@ -462,7 +451,7 @@ export default function AgentDetailPage({ agent, ...props }) {
       <div className={`agent-page-body ${agent === 'SENTINEL' || agent === 'SHERLOCK' ? '' : 'agent-page-body--narrow'}`}>
         {agent === 'SENTINEL' && <SentinelPage {...props} />}
         {agent === 'SHERLOCK' && <SherlockPage {...props} />}
-        {agent === 'ORACLE' && <OraclePage {...props} />}
+
         {agent === 'ATHENA' && <AthenaPage {...props} />}
         {agent === 'GUARDIAN' && <GuardianPage {...props} />}
         {agent === 'QUARTERMASTER' && <QuartermasterPage {...props} />}

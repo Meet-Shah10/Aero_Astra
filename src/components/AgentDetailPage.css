@@ -7,6 +7,13 @@
   background: #030405;
 }
 
+/* ORACLE needs full-bleed layout — no outer padding, darker bg, scroll inside oracle-view */
+.agent-page.agent-page--oracle {
+  padding: 0;
+  background: #06090E;
+  overflow: hidden;
+}
+
 .agent-page-header {
   margin-bottom: 20px;
   padding-bottom: 16px;
