@@ -210,11 +210,14 @@ def _format_constraints(constraints: MissionConstraints | None) -> str:
     return "\n".join(parts)
 
 
+
 def build_user_prompt(
     sherlock_diagnosis: SherlockDiagnosis,
     oracle_response: OracleResponse,
     constraints: MissionConstraints | None,
+    fdir_context: str = "",
 ) -> str:
+
     """
     Build the full user-facing prompt for a recovery planning request.
 
@@ -222,16 +225,35 @@ def build_user_prompt(
         sherlock_diagnosis: The validated SHERLOCK output.
         oracle_response:    ORACLE's ranked and validated action results.
         constraints:        Optional operator mission constraints.
+        fdir_context:       Optional RAG-retrieved FDIR passages from NASA-HDBK-1002.
+                            When non-empty, injected between SHERLOCK and ORACLE blocks
+                            so the LLM grounds its reasoning in authoritative guidance.
 
     Returns:
         Complete user prompt string.
     """
     valid_names = ", ".join(
-        f'"{r.action_name}"' for r in oracle_response.results
+        f'"{{r.action_name}}"' for r in oracle_response.results
     )
 
     oracle_block = _format_oracle_results(oracle_response)
     constraints_block = _format_constraints(constraints)
+
+    # RAG block: only rendered when the vectorstore returned relevant passages
+    fdir_block = (
+        f"\n{fdir_context}\n"
+        if fdir_context and fdir_context.strip()
+        else "  (no FDIR handbook context available)"
+    )
+
+    # RAG-aware instruction step: present only when context was retrieved
+    rag_instruction = (
+        "  0. Ground your reasoning_cot in the NASA FDIR GUIDANCE passages above "
+        "where relevant. Quote or paraphrase the handbook guidance when it applies "
+        "to the recommended action or its contra-indications.\n"
+        if fdir_context and fdir_context.strip()
+        else ""
+    )
 
     return f"""SHERLOCK DIAGNOSIS:
   primary_root_cause  : {sherlock_diagnosis.primary_root_cause}
@@ -242,6 +264,8 @@ def build_user_prompt(
   confidence          : {sherlock_diagnosis.confidence_score:.0%}
   reasoning           : {sherlock_diagnosis.reasoning}
 
+NASA FDIR GUIDANCE (RAG-RETRIEVED from NASA-HDBK-1002):
+{fdir_block}
 ORACLE VALIDATED RESULTS (already ranked by safety_score — do NOT alter these scores):
 {oracle_block}
 
@@ -252,7 +276,7 @@ MISSION CONSTRAINTS (qualitative context for your reasoning — not formal limit
 {constraints_block}
 
 INSTRUCTIONS:
-  1. Complete reasoning_cot (minimum 2 steps) BEFORE writing options.
+{rag_instruction}  1. Complete reasoning_cot (minimum 2 steps) BEFORE writing options.
   2. Select 2–3 options from the ORACLE results above. Prefer options with higher
      safety_score unless mission constraints or effectiveness considerations justify
      a different order.

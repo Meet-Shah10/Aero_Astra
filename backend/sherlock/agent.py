@@ -56,12 +56,13 @@ log = logging.getLogger(__name__)
 # Configuration
 # ─────────────────────────────────────────────────────────────────────────────
 
-# OpenRouter model identifier — verified available on this account
-DEFAULT_MODEL = "anthropic/claude-sonnet-4-5"
-DEFAULT_TEMPERATURE = 0.1   # Near-deterministic — safety-relevant agent
-DEFAULT_MAX_TOKENS = 1024
-DEFAULT_MAX_RETRIES = 3
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+# Google AI Studio (Gemini) — OpenAI-compatible endpoint
+# Env var: GEMINI_API_KEY  (falls back to OPENROUTER_API_KEY for backwards compat)
+DEFAULT_MODEL   = "models/gemini-2.5-flash"          # fast, capable, generous free tier
+DEFAULT_TEMPERATURE  = 0.1   # Near-deterministic — safety-relevant agent
+DEFAULT_MAX_TOKENS   = 2048              # enough for full SherlockDiagnosis JSON
+DEFAULT_MAX_RETRIES  = 3
+GEMINI_BASE_URL  = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -97,15 +98,20 @@ class SherlockAgent:
         candidate_depth: int = DEFAULT_CANDIDATE_DEPTH,
         telemetry_provider: TelemetryProvider | None = None,
     ) -> None:
-        resolved_key = api_key or os.environ.get("OPENROUTER_API_KEY")
+        # GEMINI_API_KEY preferred; fall back to OPENROUTER_API_KEY for compat
+        resolved_key = (
+            api_key
+            or os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("OPENROUTER_API_KEY")
+        )
         if not resolved_key:
             raise EnvironmentError(
-                "OpenRouter API key not found. Set the OPENROUTER_API_KEY environment "
-                "variable or pass api_key= to SherlockAgent()."
+                "API key not found. Set GEMINI_API_KEY (Google AI Studio) "
+                "or OPENROUTER_API_KEY in environment, or pass api_key= to SherlockAgent()."
             )
 
         self._client = OpenAI(
-            base_url=OPENROUTER_BASE_URL,
+            base_url=GEMINI_BASE_URL,
             api_key=resolved_key,
         )
         self._model = model
@@ -281,11 +287,12 @@ class SherlockAgent:
         ]
         response = self._client.chat.completions.create(
             model=self._model,
-            max_tokens=DEFAULT_MAX_TOKENS,
+            max_completion_tokens=DEFAULT_MAX_TOKENS,
             temperature=self._temperature,
             messages=full_messages,
         )
-        raw = response.choices[0].message.content.strip()
+        raw = response.choices[0].message.content or ""
+        raw = raw.strip()
         log.debug("LLM raw response: %s", raw[:300])
         return raw
 

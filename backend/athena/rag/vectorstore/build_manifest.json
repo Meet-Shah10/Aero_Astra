@@ -1,0 +1,8 @@
+{
+  "embed_model": "models/gemini-embedding-001",
+  "chunk_size": 1000,
+  "chunk_overlap": 200,
+  "collection": "nasa_hdbk_1002",
+  "doc_count": 20,
+  "built_at": "2026-09-04T13:28:58.572691+00:00"
+}
