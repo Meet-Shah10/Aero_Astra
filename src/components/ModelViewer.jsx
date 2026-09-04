@@ -66,13 +66,11 @@ const ModelInner = ({
   lockRotation,
   lockYaw,
   lockPitch,
-  tintColor,
   onLoaded
 }) => {
   const outer = useRef(null);
   const inner = useRef(null);
   const { camera, gl } = useThree();
-  const tintedMats = useRef([]);
 
   const vel = useRef({ x: 0, y: 0 });
   const tPar = useRef({ x: 0, y: 0 });
@@ -103,7 +101,6 @@ const ModelInner = ({
     g.position.set(0, 0, 0);
     g.scale.setScalar(s);
 
-    tintedMats.current = [];
     g.traverse(o => {
       if (o.isMesh) {
         o.castShadow = true;
@@ -111,21 +108,6 @@ const ModelInner = ({
         if (fadeIn) {
           o.material.transparent = true;
           o.material.opacity = 0;
-        }
-        if (tintColor) {
-          // Clone before mutating — o.material may be a shared reference
-          // from the cached GLTF scene (useGLTF caches by url), and
-          // mutating it in place would tint every other user of that
-          // asset too.
-          const applyTint = (mat) => {
-            if (!mat) return mat;
-            const m = mat.clone();
-            m.emissive = new THREE.Color(tintColor);
-            m.emissiveIntensity = 1.1;
-            tintedMats.current.push(m);
-            return m;
-          };
-          o.material = Array.isArray(o.material) ? o.material.map(applyTint) : applyTint(o.material);
         }
       }
     });
@@ -161,7 +143,7 @@ const ModelInner = ({
       return () => clearInterval(id);
     } else onLoaded?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [content, tintColor]);
+  }, [content]);
 
   useEffect(() => {
     if (!enableManualRotation || isTouch) return;
@@ -300,13 +282,7 @@ const ModelInner = ({
     return () => window.removeEventListener('pointermove', mm);
   }, [enableMouseParallax, enableHoverRotation]);
 
-  useFrame((state, dt) => {
-    if (tintColor && tintedMats.current.length > 0) {
-      // Slow alert pulse — 0.7-1.5 emissive intensity, ~1.4s period.
-      const pulse = 1.1 + Math.sin(state.clock.elapsedTime * 4.5) * 0.4;
-      for (const m of tintedMats.current) m.emissiveIntensity = pulse;
-      invalidate();
-    }
+  useFrame((_, dt) => {
     let need = false;
     cPar.current.x += (tPar.current.x - cPar.current.x) * PARALLAX_EASE;
     cPar.current.y += (tPar.current.y - cPar.current.y) * PARALLAX_EASE;
@@ -400,7 +376,6 @@ const ModelViewer = ({
   lockRotation = false,
   lockRotationX,
   lockRotationY,
-  tintColor,
   onModelLoaded
 }) => {
   useEffect(() => void useGLTF.preload(url), [url]);
@@ -512,7 +487,6 @@ const ModelViewer = ({
             lockRotation={lockRotation}
             lockYaw={lockYaw}
             lockPitch={lockPitch}
-            tintColor={tintColor}
             onLoaded={onModelLoaded}
           />
         </Suspense>

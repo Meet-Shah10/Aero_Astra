@@ -417,38 +417,6 @@ body {
   box-shadow: 0 0 8px #ff3b3b;
 }
 
-.fault-part-label {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  background: rgba(60, 0, 0, 0.55);
-  padding: 8px 14px;
-  border: 1px solid rgba(255, 60, 60, 0.55);
-  border-radius: 4px;
-  z-index: 10;
-  font-size: 11px;
-  font-family: monospace;
-  letter-spacing: 1.5px;
-  color: #ff8080;
-  display: flex;
-  align-items: center;
-}
-
-.fault-part-label-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  background-color: #ff3b3b;
-  border-radius: 50%;
-  margin-right: 8px;
-  animation: fault-part-pulse 1.4s ease-in-out infinite;
-}
-
-@keyframes fault-part-pulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 6px #ff3b3b; }
-  50% { opacity: 0.4; box-shadow: 0 0 2px #ff3b3b; }
-}
-
 .data-row {
   display: flex;
   justify-content: space-between;
