@@ -8,7 +8,11 @@ import AgentDetailPage from './components/AgentDetailPage';
 import BorderGlow from './components/BorderGlow';
 import TargetCursor from './components/TargetCursor';
 import OrbitSatellite from './components/OrbitSatellite';
+import { useGLTF } from '@react-three/drei';
 import './index.css';
+
+useGLTF.preload('/simple_satellite_low_poly_free.glb');
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Agent roster — plain-English descriptions sourced verbatim from pitch.md's
