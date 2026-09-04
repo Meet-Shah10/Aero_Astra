@@ -25,7 +25,7 @@ from backend.simulator.engine import simulate_scenario
 from backend.simulator.schemas import SatelliteState
 from backend.sentinel.engines import SentinelPersistenceFilter, PhysicsSpikeFilter, score_xgboost
 from backend.sherlock.agent import SherlockAgent
-from backend.sherlock.schemas import AnomalyEvent, TelemetrySnapshot, UrgencyLevel
+from backend.sherlock.schemas import AnomalyEvent, TelemetrySnapshot, UrgencyLevel, SeverityLevel
 from backend.sherlock.telemetry_interface import TelemetryProvider
 from backend.oracle.agent import run_oracle
 from backend.oracle.schemas import OracleRequest
@@ -166,7 +166,7 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
     log.info("Starting Streaming Bridge...")
     
     # 1. Generate nominal data for baseline
-    nom_result = simulate_scenario(fault=None, duration=600.0, dt=1.0)
+    nom_result = simulate_scenario(fault=None, duration=60.0, dt=1.0)
     nom_data = {
         'CADC0872': [f.state.adcs.attitude_error for f in nom_result.frames],
         'CADC0873': [f.state.adcs.reaction_wheel_speed for f in nom_result.frames],
@@ -183,7 +183,7 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
     }
 
     # Generate scenario with fault
-    sim = simulate_scenario(fault=fault_scenario, duration=600.0, dt=1.0, fault_onset=5.0, severity=severity)
+    sim = simulate_scenario(fault=fault_scenario, duration=60.0, dt=1.0, fault_onset=2.0, severity=severity)
     
     persistence = SentinelPersistenceFilter(threshold=0.60, min_consecutive_steps=35)
     # KNOWN ISSUE, NOT resolved — measured directly (see roadmap.md §2): this
@@ -253,7 +253,7 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
                 })
 
     for frame in sim.frames:
-        await asyncio.sleep(1.0) # stream one simulation frame per second
+        await asyncio.sleep(0.1) # stream ten simulation frames per second (very fast demo mode)
         
         # Format Telemetry for Frontend
         telemetry_msg = {
@@ -347,7 +347,7 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
                     # "detected, moderately confident" without pretending to
                     # more precision than the underlying detectors actually have.
                     confidence_score=0.75,
-                    severity=UrgencyLevel.HIGH,
+                    severity=SeverityLevel.HIGH,
                     telemetry_window=[]
                 )
                 
@@ -399,7 +399,7 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
                 # SIMULATION (ORACLE) in background
                 req = OracleRequest(
                     current_state=frame.state,
-                    fault_name=diagnosis.primary_root_cause,
+                    fault_name=fault_scenario,
                     fault_severity=severity,
                     diagnosis_context=diagnosis.reasoning
                 )

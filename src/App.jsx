@@ -292,10 +292,8 @@ function App() {
     '> SCRIBE: Audit trail ready. All agents online.',
   ];
 
-  // ── WebSocket connection: open when dashboard is shown, close when not ──
+  // ── WebSocket connection: open immediately on mount, persist for session ──
   useEffect(() => {
-    if (!showDashboard) return;
-
     const WS_URL = 'ws://localhost:8000/ws';
     let ws;
     let reconnectTimer;
@@ -321,7 +319,7 @@ function App() {
               break;
             case 'sentinel_alert':
               setBackendData(prev => ({ ...prev, sentinel: msg }));
-              setScenarioPhase(p => p === 'nominal' ? 'detected' : p);
+              setScenarioPhase('detected');
               setLogs(prev => [...prev,
                 `> ⚠ SENTINEL: Anomaly detected via ${msg.triggered_engine}`,
               ]);
@@ -389,7 +387,7 @@ function App() {
       if (wsRef.current) wsRef.current.close();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showDashboard]);
+  }, []);
 
   // ── Launch sequence ──
   // 1. Set launched=true → Scene3D camera starts dollying in
