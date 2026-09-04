@@ -63,11 +63,13 @@ const PillNav = ({
     window.addEventListener('resize', onResize);
     if (document.fonts?.ready) document.fonts.ready.then(layout).catch(() => {});
 
-    const navItems = navItemsRef.current;
-    if (navItems) {
-      gsap.set(navItems, { width: 0, overflow: 'hidden' });
-      gsap.to(navItems, { width: 'auto', duration: 0.6, ease });
-    }
+    // Nav is visible at full width immediately — no animated 0->auto width
+    // reveal. That tween fought with React 18 StrictMode's double-invoke
+    // (mount -> cleanup -> mount) badly enough to leave the nav
+    // permanently stuck collapsed at width:0 in some runs, and even when
+    // it "worked" it was the reported "dashboard button glitching" (every
+    // WS-driven re-render used to restart the whole 0->auto tween). Not
+    // worth an entrance animation on the primary nav.
 
     return () => window.removeEventListener('resize', onResize);
   }, [items, ease]);

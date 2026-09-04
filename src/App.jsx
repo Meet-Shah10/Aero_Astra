@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import ModelViewer from './components/ModelViewer';
 import Scene3D from './components/Scene3D';
 import RotatingEarth from './components/RotatingEarth';
@@ -291,6 +291,16 @@ function App() {
   // area. null = the normal operational grid (3D view + bottom-bar controls).
   const [activeAgentPage, setActiveAgentPage] = useState(null);
 
+  // Memoized so PillNav's layout effect (keyed on this array's identity)
+  // doesn't re-run on every WS-driven re-render (~10/s) — an inline array
+  // literal here was a fresh reference every render, which reset PillNav's
+  // width to 0 and replayed its open animation constantly, i.e. the
+  // "dashboard button glitching" symptom.
+  const navItems = useMemo(() => [
+    { id: 'dashboard', label: 'Dashboard', onClick: () => { setActiveView('dashboard'); setActiveAgentPage(null); } },
+    { id: 'about', label: 'About', onClick: () => setActiveView('about') },
+  ], []);
+
   // Scenario picker + comparison panel state
   const [showScenarioPicker, setShowScenarioPicker] = useState(false);
   const [pendingScenario, setPendingScenario] = useState('thermal_runaway');
@@ -315,6 +325,12 @@ function App() {
   // it crosses the SENTINEL fallback threshold (0.85), not just repeat the
   // sentinel_alert line — a real threshold-cross event, not a duplicate.
   const lastWorstHealthRef = useRef(1.0);
+  // Same stale-closure problem as activeScenarioRef: executeRunbook's
+  // setTimeout reads backendData 4s after being scheduled, by which point
+  // ORACLE/ATHENA (background tasks) have often only just resolved. Kept
+  // in sync below so the compiled runbook reflects the latest data, not
+  // whatever was true at the moment execution started.
+  const backendDataRef = useRef(null);
   const [backendOnline, setBackendOnline] = useState(false);
   const [backendData, setBackendData] = useState({
     sentinel: null,    // { triggered_engine, timestamp }
@@ -325,6 +341,13 @@ function App() {
     telemetry: null,   // { subsystems: { ADCS, EPS } }
     vitals: null,      // { worst_health, ... }
   });
+  useEffect(() => { backendDataRef.current = backendData; }, [backendData]);
+
+  // SCRIBE's compiled runbook — built from real backendData at the moment
+  // execution resolves, not downloaded (removed per feedback: it was
+  // generating a .txt file to disk on every single run). Rendered in-page
+  // on the SCRIBE agent tab instead.
+  const [scribeReport, setScribeReport] = useState(null);
 
   const loadMessages = [
     '> BOOT: AERO-ASTRA MISSION CONTROL v2.5',
@@ -437,8 +460,10 @@ function App() {
 
       ws.onclose = () => {
         setBackendOnline(false);
-        // Auto-reconnect after 3s
-        reconnectTimer = setTimeout(connect, 3000);
+        // Auto-reconnect fast — was 3s, which reads as a long, alarming
+        // "OFFLINE" window on-screen for what's usually a dev-server reload
+        // blip lasting well under a second.
+        reconnectTimer = setTimeout(connect, 800);
       };
 
       ws.onerror = () => {
@@ -491,6 +516,7 @@ function App() {
     setActiveSeverity(null);
     setGuardianTier(null);
     setShowDiff(false);
+    setScribeReport(null);
     setLogs(['> System reset.', '> Telemetry linked on band S7.', '> SENTINEL: Monitoring 5 active assets.']);
   };
 
@@ -520,6 +546,7 @@ function App() {
     setScenarioPhase('nominal');
     setGuardianTier(null);
     setGuardianApproved(false);
+    setScribeReport(null);
 
     // Call real backend — kicks off the physics simulation + full agent pipeline.
     // Falls back silently if backend is offline (keeps the UI usable in demo mode).
@@ -592,10 +619,33 @@ function App() {
       setScenarioPhase('resolved');
       setLogs(prev => [...prev, '> SYSTEM: Telemetry nominal.', '> SCRIBE: Runbook finalized. Returning to monitoring.']);
       setGuardianApproved(false);
+      // Compile the audit runbook from whatever real backend data actually
+      // arrived this run — sherlock/oracle/athena may be null if the
+      // pipeline was still mid-flight or backend was offline; the report
+      // renders each section as "not available" rather than fabricating it.
+      setScribeReport({
+        generatedAt: new Date().toISOString(),
+        scenario: scenario.label,
+        faultId: scenario.faultId,
+        subsystem: scenario.subsystem,
+        severity: activeSeverity,
+        guardianTier,
+        mitigationOption: selectedMitigation,
+        sentinel: backendDataRef.current?.sentinel,
+        sherlock: backendDataRef.current?.sherlock,
+        oracle: backendDataRef.current?.oracle,
+        athena: backendDataRef.current?.athena,
+      });
     }, 4000);
   };
 
   const isAnomaly = scenarioPhase !== 'nominal' && scenarioPhase !== 'resolved';
+  // Distinct from isAnomaly: stays true through 'resolved' so agent tabs
+  // keep showing the run's real data instead of snapping back to "Standby"
+  // the moment it resolves. AUTOMATED_GUARDED scenarios auto-resolve in
+  // ~5s — without this, clicking into ORACLE/ATHENA a beat too late showed
+  // nothing even though a real simulation had just run.
+  const hasIncidentData = scenarioPhase !== 'nominal';
 
   // Live telemetry = baseline with the active scenario's field-level
   // overrides applied. Same shape a real `telemetry` WS message would have
@@ -693,10 +743,7 @@ function App() {
 
             <PillNav
               activeId={activeView}
-              items={[
-                { id: 'dashboard', label: 'Dashboard', onClick: () => { setActiveView('dashboard'); setActiveAgentPage(null); } },
-                { id: 'about', label: 'About', onClick: () => setActiveView('about') },
-              ]}
+              items={navItems}
             />
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
@@ -722,8 +769,8 @@ function App() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '9px', color: 'rgba(255,255,255,0.5)', fontFamily: 'monospace' }}>
           SIGNAL: <span style={{ color: '#00FF88', fontWeight: 'bold' }}>LINK_NOMINAL</span>
           &nbsp;|&nbsp;
-          BACKEND: <span style={{ color: backendOnline ? '#00FF88' : '#ff4444', fontWeight: 'bold' }}>
-            {backendOnline ? '● LIVE' : '○ OFFLINE'}
+          BACKEND: <span style={{ color: backendOnline ? '#00FF88' : '#FFC168', fontWeight: 'bold' }}>
+            {backendOnline ? '● LIVE' : '○ RECONNECTING'}
           </span>
         </div>
       </div>
@@ -896,41 +943,37 @@ function App() {
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px', marginBottom: '22px' }}>
               {Object.values(FAULT_SCENARIOS).map(s => (
-                <BorderGlow key={s.key} borderRadius={4} glowRadius={18} fillOpacity={pendingScenario === s.key ? 0.4 : 0.15}
-                  backgroundColor={pendingScenario === s.key ? 'rgba(230,232,236,0.1)' : 'rgba(255,255,255,0.02)'}>
-                  <div onClick={() => setPendingScenario(s.key)} style={{
-                    border: pendingScenario === s.key ? '1px solid #EDEEF2' : '1px solid transparent',
-                    borderRadius: '4px', padding: '12px 10px', cursor: 'pointer', transition: 'all 0.15s ease',
-                  }}>
-                    <div style={{ fontSize: '11px', fontWeight: 'bold', color: pendingScenario === s.key ? '#EDEEF2' : '#ccc', marginBottom: '4px' }}>
-                      {s.label}
-                    </div>
-                    <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.4)', lineHeight: 1.5 }}>{s.summary}</div>
+                <div key={s.key} onClick={() => setPendingScenario(s.key)} style={{
+                  border: pendingScenario === s.key ? '1px solid #EDEEF2' : '1px solid rgba(255,255,255,0.08)',
+                  background: pendingScenario === s.key ? 'rgba(230,232,236,0.08)' : 'rgba(255,255,255,0.02)',
+                  borderRadius: '4px', padding: '12px 10px', cursor: 'pointer', transition: 'border-color 0.15s ease, background 0.15s ease',
+                }}>
+                  <div style={{ fontSize: '11px', fontWeight: 'bold', color: pendingScenario === s.key ? '#EDEEF2' : '#ccc', marginBottom: '4px' }}>
+                    {s.label}
                   </div>
-                </BorderGlow>
+                  <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.4)', lineHeight: 1.5 }}>{s.summary}</div>
+                </div>
               ))}
             </div>
 
             <div style={{ fontSize: '9px', letterSpacing: '0.15em', color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', marginBottom: '8px' }}>
               Historical Case Study
             </div>
-            <BorderGlow borderRadius={4} glowRadius={22} fillOpacity={pendingScenario === CASE_STUDY_SCENARIO.key ? 0.5 : 0.18}
-              backgroundColor={pendingScenario === CASE_STUDY_SCENARIO.key ? 'rgba(255,180,80,0.08)' : 'rgba(255,180,80,0.03)'}>
-              <div onClick={() => setPendingScenario(CASE_STUDY_SCENARIO.key)} style={{
-                border: pendingScenario === CASE_STUDY_SCENARIO.key ? '1px solid rgba(255,180,80,0.7)' : '1px solid rgba(255,180,80,0.15)',
-                borderRadius: '4px', padding: '12px 14px', cursor: 'pointer', transition: 'all 0.15s ease', marginBottom: '22px',
-              }}>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '4px' }}>
-                  <span style={{ fontSize: '11px', fontWeight: 'bold', color: pendingScenario === CASE_STUDY_SCENARIO.key ? '#FFC168' : '#ccc' }}>
-                    {CASE_STUDY_SCENARIO.label}
-                  </span>
-                  <span style={{ fontSize: '8px', color: 'rgba(255,180,80,0.7)', letterSpacing: '0.1em' }}>
-                    REPLAYS {CASE_STUDY_SCENARIO.citation.incident}
-                  </span>
-                </div>
-                <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.45)', lineHeight: 1.5 }}>{CASE_STUDY_SCENARIO.summary}</div>
+            <div onClick={() => setPendingScenario(CASE_STUDY_SCENARIO.key)} style={{
+              border: pendingScenario === CASE_STUDY_SCENARIO.key ? '1px solid rgba(255,180,80,0.7)' : '1px solid rgba(255,180,80,0.15)',
+              background: pendingScenario === CASE_STUDY_SCENARIO.key ? 'rgba(255,180,80,0.06)' : 'rgba(255,180,80,0.02)',
+              borderRadius: '4px', padding: '12px 14px', cursor: 'pointer', transition: 'border-color 0.15s ease, background 0.15s ease', marginBottom: '22px',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '4px' }}>
+                <span style={{ fontSize: '11px', fontWeight: 'bold', color: pendingScenario === CASE_STUDY_SCENARIO.key ? '#FFC168' : '#ccc' }}>
+                  {CASE_STUDY_SCENARIO.label}
+                </span>
+                <span style={{ fontSize: '8px', color: 'rgba(255,180,80,0.7)', letterSpacing: '0.1em' }}>
+                  REPLAYS {CASE_STUDY_SCENARIO.citation.incident}
+                </span>
               </div>
-            </BorderGlow>
+              <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.45)', lineHeight: 1.5 }}>{CASE_STUDY_SCENARIO.summary}</div>
+            </div>
 
             <div style={{ marginBottom: '24px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'rgba(255,255,255,0.5)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -1077,6 +1120,7 @@ function App() {
             activeScenario={activeScenario}
             activeSeverity={activeSeverity}
             isAnomaly={isAnomaly}
+            hasIncidentData={hasIncidentData}
             scenarioPhase={scenarioPhase}
             guardianTier={guardianTier}
             guardianApproved={guardianApproved}
@@ -1090,6 +1134,7 @@ function App() {
             TELEMETRY_ROWS={TELEMETRY_ROWS}
             backendOnline={backendOnline}
             backendData={backendData}
+            scribeReport={scribeReport}
           />
         ) : (
         <>

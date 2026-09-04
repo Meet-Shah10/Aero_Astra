@@ -18,20 +18,127 @@ function Empty({ label }) {
   return <div className="agent-page-empty">{label}</div>;
 }
 
-function SentinelPage({ activeScenario, activeSeverity, isAnomaly, TELEMETRY_ROWS, BASELINE_TELEMETRY, liveTelemetry, backendOnline, backendData }) {
+// Mirrors backend/sherlock/graph.py's SatelliteGraph exactly — 6 nodes, 18
+// directed edges. An edge A -> B means "a fault in A can propagate to or
+// cause a fault in B," so SHERLOCK's candidate set for a flagged subsystem
+// is {itself} union {direct predecessors} — every node with an edge pointing
+// INTO it. This is what makes the LLM's diagnosis unable to hallucinate: it
+// can only ever pick from this graph-computed set.
+const DEPENDENCY_SUBSYSTEMS = ['EPS', 'TCS', 'ADCS', 'OBC', 'TT&C', 'Propulsion'];
+const DEPENDENCY_EDGES = [
+  ['EPS', 'TCS'], ['EPS', 'ADCS'], ['EPS', 'OBC'], ['EPS', 'TT&C'], ['EPS', 'Propulsion'],
+  ['TCS', 'ADCS'], ['TCS', 'OBC'], ['TCS', 'EPS'], ['TCS', 'Propulsion'],
+  ['ADCS', 'TCS'], ['ADCS', 'EPS'], ['ADCS', 'TT&C'],
+  ['OBC', 'ADCS'], ['OBC', 'TT&C'], ['OBC', 'EPS'],
+  ['TT&C', 'OBC'],
+  ['Propulsion', 'ADCS'], ['Propulsion', 'TCS'],
+];
+
+// Hexagon layout, EPS at 12 o'clock, clockwise.
+const HEX_R = 108;
+const HEX_CENTER = 140;
+const DEPENDENCY_POSITIONS = Object.fromEntries(
+  DEPENDENCY_SUBSYSTEMS.map((s, i) => {
+    const angle = -Math.PI / 2 + (i * 2 * Math.PI) / DEPENDENCY_SUBSYSTEMS.length;
+    return [s, { x: HEX_CENTER + HEX_R * Math.cos(angle), y: HEX_CENTER + HEX_R * Math.sin(angle) }];
+  })
+);
+
+// Full 6-node/18-edge dependency graph, with the flagged subsystem's
+// candidate set (graph-computed predecessors) and the confirmed causal
+// chain highlighted on top of it — this is what actually constrains
+// SHERLOCK's LLM call on the backend, not just the one chain that fired.
+function DependencyGraph({ flaggedSubsystem, causalChain }) {
+  const candidateSet = new Set([
+    flaggedSubsystem,
+    ...DEPENDENCY_EDGES.filter(([, to]) => to === flaggedSubsystem).map(([from]) => from),
+  ]);
+  const chainSet = new Set(causalChain);
+  const chainEdgeSet = new Set(
+    causalChain.slice(0, -1).map((s, i) => `${s}->${causalChain[i + 1]}`)
+  );
+
+  return (
+    <div className="dep-graph-wrap">
+      <svg width={280} height={280} viewBox="0 0 280 280">
+        <defs>
+          <marker id="dep-arrow-dim" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+            <path d="M0,0 L6,3 L0,6 Z" fill="rgba(255,255,255,0.15)" />
+          </marker>
+          <marker id="dep-arrow-candidate" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+            <path d="M0,0 L6,3 L0,6 Z" fill="rgba(255,190,90,0.7)" />
+          </marker>
+          <marker id="dep-arrow-chain" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+            <path d="M0,0 L7,3.5 L0,7 Z" fill="#52ff52" />
+          </marker>
+        </defs>
+
+        {DEPENDENCY_EDGES.map(([from, to]) => {
+          const a = DEPENDENCY_POSITIONS[from];
+          const b = DEPENDENCY_POSITIONS[to];
+          const isChainEdge = chainEdgeSet.has(`${from}->${to}`);
+          const isCandidateEdge = to === flaggedSubsystem;
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const len = Math.hypot(dx, dy);
+          const ux = dx / len, uy = dy / len;
+          const NR = 22;
+          const x1 = a.x + ux * NR, y1 = a.y + uy * NR;
+          const x2 = b.x - ux * NR, y2 = b.y - uy * NR;
+          return (
+            <line
+              key={`${from}-${to}`}
+              x1={x1} y1={y1} x2={x2} y2={y2}
+              stroke={isChainEdge ? '#52ff52' : isCandidateEdge ? 'rgba(255,190,90,0.7)' : 'rgba(255,255,255,0.15)'}
+              strokeWidth={isChainEdge ? 2.2 : isCandidateEdge ? 1.6 : 1}
+              markerEnd={`url(#dep-arrow-${isChainEdge ? 'chain' : isCandidateEdge ? 'candidate' : 'dim'})`}
+            />
+          );
+        })}
+
+        {DEPENDENCY_SUBSYSTEMS.map(s => {
+          const p = DEPENDENCY_POSITIONS[s];
+          const isFlagged = s === flaggedSubsystem;
+          const isChain = chainSet.has(s);
+          const isCandidate = candidateSet.has(s) && !isChain;
+          const fill = isChain ? 'rgba(82,255,82,0.14)' : isFlagged ? 'rgba(255,90,90,0.14)' : isCandidate ? 'rgba(255,190,90,0.1)' : 'rgba(255,255,255,0.03)';
+          const stroke = isChain ? '#52ff52' : isFlagged ? '#ff5a5a' : isCandidate ? 'rgba(255,190,90,0.8)' : 'rgba(255,255,255,0.25)';
+          return (
+            <g key={s}>
+              <circle cx={p.x} cy={p.y} r={22} fill={fill} stroke={stroke} strokeWidth={isChain || isFlagged ? 2 : 1.2} />
+              <text x={p.x} y={p.y + 4} textAnchor="middle" fontSize="9.5" fontWeight="700"
+                fontFamily="var(--font-mono)" fill={isChain ? '#52ff52' : isFlagged ? '#ff5a5a' : '#EDEEF2'}>
+                {s}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+      <div className="dep-graph-legend">
+        <div><i className="dep-legend-swatch" style={{ background: 'rgba(255,90,90,0.8)' }} /> Flagged subsystem (SENTINEL)</div>
+        <div><i className="dep-legend-swatch" style={{ background: 'rgba(255,190,90,0.8)' }} /> Graph-valid candidates (physically possible)</div>
+        <div><i className="dep-legend-swatch" style={{ background: '#52ff52' }} /> Confirmed causal chain</div>
+      </div>
+    </div>
+  );
+}
+
+function SentinelPage({ activeScenario, activeSeverity, isAnomaly, hasIncidentData, TELEMETRY_ROWS, BASELINE_TELEMETRY, liveTelemetry, backendOnline, backendData }) {
   const liveTm = backendOnline ? backendData?.telemetry : null;
   // Metadata rows are real, derived state — not decoration. baseline is
   // always the clean-run snapshot; live reflects whatever's actually active.
+  // Gated on hasIncidentData (not isAnomaly) so the last run's values stay
+  // visible after it resolves instead of snapping back to baseline —
+  // AUTOMATED_GUARDED scenarios auto-resolve in ~5s, too fast to read.
   const metaRows = [
-    { key: '__fault', label: 'active_fault', baseline: 'none', live: isAnomaly ? activeScenario.faultId : 'none' },
-    { key: '__severity', label: 'severity', baseline: '0.00', live: isAnomaly ? activeSeverity.toFixed(2) : '0.00' },
-    { key: '__subsystem', label: 'flagged_subsystem', baseline: '—', live: isAnomaly ? activeScenario.subsystem : '—' },
+    { key: '__fault', label: 'active_fault', baseline: 'none', live: hasIncidentData ? activeScenario.faultId : 'none' },
+    { key: '__severity', label: 'severity', baseline: '0.00', live: hasIncidentData ? activeSeverity.toFixed(2) : '0.00' },
+    { key: '__subsystem', label: 'flagged_subsystem', baseline: '—', live: hasIncidentData ? activeScenario.subsystem : '—' },
   ];
   const dataRows = TELEMETRY_ROWS.map(row => ({
     key: row.key,
     label: row.label,
     baseline: BASELINE_TELEMETRY[row.key],
-    live: isAnomaly ? liveTelemetry[row.key] : BASELINE_TELEMETRY[row.key],
+    live: hasIncidentData ? liveTelemetry[row.key] : BASELINE_TELEMETRY[row.key],
   }));
   const rows = [...metaRows, ...dataRows];
 
@@ -65,7 +172,7 @@ function SentinelPage({ activeScenario, activeSeverity, isAnomaly, TELEMETRY_ROW
           <div className="dataset-pane-head">PHYSICS_SIMULATOR — BASELINE.SNAPSHOT</div>
           <div className="dataset-pane-body">
             {rows.map((row, i) => {
-              const changed = isAnomaly && row.live !== row.baseline;
+              const changed = hasIncidentData && row.live !== row.baseline;
               return (
                 <div key={row.key} className={`dataset-line ${changed ? 'dataset-line--changed' : ''}`}>
                   <span className="dataset-line-no">{String(i + 1).padStart(2, '0')}</span>
@@ -80,7 +187,7 @@ function SentinelPage({ activeScenario, activeSeverity, isAnomaly, TELEMETRY_ROW
           <div className="dataset-pane-head">LIVE_TELEMETRY — CURRENT.SNAPSHOT</div>
           <div className="dataset-pane-body">
             {rows.map((row, i) => {
-              const changed = isAnomaly && row.live !== row.baseline;
+              const changed = hasIncidentData && row.live !== row.baseline;
               return (
                 <div key={row.key} className={`dataset-line ${changed ? 'dataset-line--changed' : ''}`}>
                   <span className="dataset-line-no">{String(i + 1).padStart(2, '0')}</span>
@@ -101,7 +208,7 @@ const NODE_GAP = 128;
 const NODE_R = 34;
 const GRAPH_W = 340;
 
-function SherlockPage({ activeScenario, isAnomaly, liveTelemetry }) {
+function SherlockPage({ activeScenario, isAnomaly, hasIncidentData, liveTelemetry }) {
   const [selected, setSelected] = useState(0);
   const [replayKey, setReplayKey] = useState(0);
   const nodeRefs = useRef([]);
@@ -142,7 +249,7 @@ function SherlockPage({ activeScenario, isAnomaly, liveTelemetry }) {
     return () => tl.kill();
   }, [activeScenario, isAnomaly, n, replayKey]);
 
-  if (!isAnomaly || !activeScenario) {
+  if (!hasIncidentData || !activeScenario) {
     return <Empty label="Awaiting fault trigger — nothing to diagnose yet." />;
   }
 
@@ -160,6 +267,16 @@ function SherlockPage({ activeScenario, isAnomaly, liveTelemetry }) {
       <p className="agent-page-lede">
         Backtracing from the observed symptom through the causal dependency graph to the true root cause.
       </p>
+
+      <div className="dep-graph-section">
+        <div className="dep-graph-section-title">FULL DEPENDENCY GRAPH — why these candidates, not others</div>
+        <p className="text-muted" style={{ fontSize: 10, marginBottom: 12, lineHeight: 1.6 }}>
+          6 subsystems, 18 directed edges (backend/sherlock/graph.py). Given the subsystem SENTINEL flagged, the
+          only physically valid root causes are itself plus every subsystem with an edge pointing into it — the LLM's
+          diagnosis is constrained to this set before it ever runs, so it cannot claim a root cause the graph rules out.
+        </p>
+        <DependencyGraph flaggedSubsystem={activeScenario.subsystem} causalChain={chain} />
+      </div>
 
       <div className="sherlock-layout">
         <div className="causal-graph-wrap">
@@ -232,8 +349,8 @@ function SherlockPage({ activeScenario, isAnomaly, liveTelemetry }) {
   );
 }
 
-function OraclePage({ isAnomaly, backendOnline, backendData }) {
-  if (!isAnomaly) return <Empty label="Standby — no simulation requested." />;
+function OraclePage({ hasIncidentData, backendOnline, backendData }) {
+  if (!hasIncidentData) return <Empty label="Standby — no simulation requested." />;
   const oracle = backendOnline ? backendData?.oracle : null;
   if (!oracle) return <Empty label="Waiting for SENTINEL/SHERLOCK before simulation can run..." />;
   const results = oracle.results || [];
@@ -243,22 +360,35 @@ function OraclePage({ isAnomaly, backendOnline, backendData }) {
       <div className="live-data-badge" style={{ marginBottom: 12 }}>
         ● LIVE — backend/oracle/agent.py — best_action={oracle.best_action}, top_score={oracle.top_score?.toFixed(2)}, mode={oracle.mode}
       </div>
-      <div className="oracle-bars">
+      <div className="oracle-legend">
+        <span><i className="oracle-legend-swatch oracle-legend-swatch--nominal" /> Nominal recovery</span>
+        <span><i className="oracle-legend-swatch oracle-legend-swatch--degraded" /> Degraded operation</span>
+        <span><i className="oracle-legend-swatch oracle-legend-swatch--loss" /> Mission loss</span>
+      </div>
+      <div className="oracle-dist">
         {results.length === 0 && (
           <div className="text-muted" style={{ fontSize: 11 }}>No candidate actions returned by ORACLE for this fault.</div>
         )}
         {results.map(r => {
-          const pct = Math.round(r.nominal_recovery_rate * 100);
-          const bad = r.mission_loss_rate > 0.15;
+          const nom = Math.round(r.nominal_recovery_rate * 100);
+          const deg = Math.round(r.degraded_operation_rate * 100);
+          const loss = Math.max(0, 100 - nom - deg);
+          const isWinner = r.action_name === oracle.best_action;
           return (
-            <div className="oracle-bar-row" key={r.action_name}>
-              <span>{r.action_name.replaceAll('_', ' ')}</span>
-              <div className="oracle-bar">
-                <div className={`oracle-bar-fill ${bad ? 'oracle-bar-fill--bad' : ''}`} style={{ width: `${pct}%` }} />
+            <div className={`oracle-dist-row ${isWinner ? 'oracle-dist-row--winner' : ''}`} key={r.action_name}>
+              <div className="oracle-dist-label">
+                <span>{r.action_name.replaceAll('_', ' ')}</span>
+                {isWinner && <span className="oracle-dist-winner-tag">SELECTED</span>}
               </div>
-              <span className={bad ? 'text-red' : 'text-green'}>
-                {pct}% recovery{r.mission_loss_rate > 0 ? ` · ${Math.round(r.mission_loss_rate * 100)}% loss risk` : ''}
-              </span>
+              <div className="oracle-dist-bar">
+                <div className="oracle-dist-seg oracle-dist-seg--nominal" style={{ width: `${nom}%` }} title={`Nominal recovery: ${nom}%`} />
+                <div className="oracle-dist-seg oracle-dist-seg--degraded" style={{ width: `${deg}%` }} title={`Degraded operation: ${deg}%`} />
+                <div className="oracle-dist-seg oracle-dist-seg--loss" style={{ width: `${loss}%` }} title={`Mission loss: ${loss}%`} />
+              </div>
+              <div className="oracle-dist-meta">
+                <span className="text-green">{nom}%</span> · <span style={{ color: 'rgba(255,200,100,0.9)' }}>{deg}%</span> · <span className={loss > 15 ? 'text-red' : 'text-muted'}>{loss}%</span>
+                <span className="text-muted" style={{ marginLeft: 8 }}>safety_score={r.safety_score.toFixed(2)}</span>
+              </div>
             </div>
           );
         })}
@@ -267,9 +397,9 @@ function OraclePage({ isAnomaly, backendOnline, backendData }) {
   );
 }
 
-function AthenaPage({ isAnomaly, scenarioPhase, selectedMitigation, setSelectedMitigation, backendOnline, backendData }) {
-  if (!isAnomaly) return <Empty label="No mitigation required." />;
-  const ready = scenarioPhase === 'planning' || scenarioPhase === 'awaiting_approval' || scenarioPhase === 'executing';
+function AthenaPage({ hasIncidentData, scenarioPhase, selectedMitigation, setSelectedMitigation, backendOnline, backendData }) {
+  if (!hasIncidentData) return <Empty label="No mitigation required." />;
+  const ready = scenarioPhase === 'planning' || scenarioPhase === 'awaiting_approval' || scenarioPhase === 'executing' || scenarioPhase === 'resolved';
   if (!ready) return <Empty label="Waiting for SHERLOCK diagnosis before options can be generated..." />;
   const athena = backendOnline ? backendData?.athena : null;
   if (!athena) return <Empty label="Waiting for ORACLE simulation before ATHENA can plan..." />;
@@ -310,15 +440,17 @@ function AthenaPage({ isAnomaly, scenarioPhase, selectedMitigation, setSelectedM
   );
 }
 
-function GuardianPage({ isAnomaly, guardianTier, guardianApproved, scenarioPhase, handleApprove }) {
+function GuardianPage({ hasIncidentData, guardianTier, guardianApproved, scenarioPhase, handleApprove }) {
   return (
     <>
       <p className="agent-page-lede">
         Low-severity events auto-execute and log themselves (AUTOMATED_GUARDED). High-severity events lock
         until a human explicitly approves (MANUAL_INTERLOCK) — nothing executes without it.
       </p>
-      {!isAnomaly ? (
+      {!hasIncidentData ? (
         <Empty label="Safety gate armed and nominal. No pending decision." />
+      ) : !guardianTier ? (
+        <Empty label="Awaiting SHERLOCK diagnosis before GUARDIAN can classify severity..." />
       ) : guardianTier === 'AUTOMATED_GUARDED' ? (
         <div className="guardian-status">
           <span className="guardian-tier-badge guardian-tier-badge--auto">● AUTOMATED_GUARDED</span>
@@ -357,17 +489,87 @@ function QuartermasterPage({ isAnomaly, activeScenario }) {
   );
 }
 
-function ScribePage({ isAnomaly, scenarioPhase, guardianTier, guardianApproved, executeRunbook }) {
+function ScribePage({ isAnomaly, scenarioPhase, guardianTier, guardianApproved, executeRunbook, scribeReport }) {
   const canExecute = isAnomaly && (guardianTier === 'AUTOMATED_GUARDED' || guardianApproved) && scenarioPhase === 'awaiting_approval';
   return (
     <>
       <p className="agent-page-lede">Compiles every agent's decision, timestamps, and reasoning into an operator-ready audit runbook.</p>
-      {!isAnomaly ? (
+      {!isAnomaly && !scribeReport ? (
         <Empty label="No incident to record." />
       ) : (
-        <button className="action-btn" disabled={!canExecute} onClick={executeRunbook} style={{ maxWidth: 280 }}>
-          {scenarioPhase === 'executing' ? 'EXECUTING...' : 'EXECUTE RUNBOOK'}
-        </button>
+        <>
+          {!scribeReport && (
+            <button className="action-btn" disabled={!canExecute} onClick={executeRunbook} style={{ maxWidth: 280, marginBottom: 20 }}>
+              {scenarioPhase === 'executing' ? 'EXECUTING...' : 'EXECUTE RUNBOOK'}
+            </button>
+          )}
+          {scenarioPhase === 'executing' && !scribeReport && (
+            <div className="text-muted" style={{ fontSize: 11 }}>Compiling audit runbook from SENTINEL/SHERLOCK/ORACLE/ATHENA/GUARDIAN records...</div>
+          )}
+          {scribeReport && (
+            <div className="scribe-report">
+              <div className="scribe-report-head">
+                <span className="live-data-badge">● AUDIT RUNBOOK — generated {new Date(scribeReport.generatedAt).toLocaleTimeString()}</span>
+              </div>
+
+              <div className="scribe-section">
+                <div className="scribe-section-title">01 · INCIDENT</div>
+                <div className="scribe-kv"><span>Scenario</span><span>{scribeReport.scenario}</span></div>
+                <div className="scribe-kv"><span>Fault ID</span><span>{scribeReport.faultId}</span></div>
+                <div className="scribe-kv"><span>Subsystem</span><span>{scribeReport.subsystem}</span></div>
+                <div className="scribe-kv"><span>Severity</span><span>{scribeReport.severity?.toFixed(2)}</span></div>
+              </div>
+
+              <div className="scribe-section">
+                <div className="scribe-section-title">02 · DETECTION (SENTINEL)</div>
+                {scribeReport.sentinel ? (
+                  <>
+                    <div className="scribe-kv"><span>Engine</span><span>{scribeReport.sentinel.triggered_engine}</span></div>
+                    <div className="scribe-kv"><span>Timestamp</span><span>t={scribeReport.sentinel.timestamp}s</span></div>
+                  </>
+                ) : <div className="text-muted" style={{ fontSize: 10 }}>No SENTINEL record for this run.</div>}
+              </div>
+
+              <div className="scribe-section">
+                <div className="scribe-section-title">03 · DIAGNOSIS (SHERLOCK)</div>
+                {scribeReport.sherlock ? (
+                  <>
+                    <div className="scribe-kv"><span>Root cause</span><span>{scribeReport.sherlock.primary_root_cause}</span></div>
+                    <div className="scribe-kv"><span>Urgency</span><span>{scribeReport.sherlock.urgency}</span></div>
+                    <div className="scribe-kv"><span>Confidence</span><span>{(scribeReport.sherlock.confidence_score * 100).toFixed(0)}%</span></div>
+                  </>
+                ) : <div className="text-muted" style={{ fontSize: 10 }}>No SHERLOCK record for this run.</div>}
+              </div>
+
+              <div className="scribe-section">
+                <div className="scribe-section-title">04 · SIMULATION (ORACLE)</div>
+                {scribeReport.oracle ? (
+                  <>
+                    <div className="scribe-kv"><span>Best action</span><span>{scribeReport.oracle.best_action?.replaceAll('_', ' ')}</span></div>
+                    <div className="scribe-kv"><span>Safety score</span><span>{scribeReport.oracle.top_score?.toFixed(2)}</span></div>
+                  </>
+                ) : <div className="text-muted" style={{ fontSize: 10 }}>No ORACLE record for this run.</div>}
+              </div>
+
+              <div className="scribe-section">
+                <div className="scribe-section-title">05 · RECOVERY PLAN (ATHENA)</div>
+                {scribeReport.athena ? (
+                  <>
+                    <div className="scribe-kv"><span>Recommended</span><span>{scribeReport.athena.recommended_action?.replaceAll('_', ' ')}</span></div>
+                    <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.55)', marginTop: 4, lineHeight: 1.5 }}>{scribeReport.athena.rationale}</div>
+                  </>
+                ) : <div className="text-muted" style={{ fontSize: 10 }}>No ATHENA record for this run.</div>}
+              </div>
+
+              <div className="scribe-section">
+                <div className="scribe-section-title">06 · EXECUTION (GUARDIAN)</div>
+                <div className="scribe-kv"><span>Tier</span><span>{scribeReport.guardianTier}</span></div>
+                <div className="scribe-kv"><span>Mitigation option</span><span>#{scribeReport.mitigationOption}</span></div>
+                <div className="scribe-kv"><span>Result</span><span className="text-green">Nominal</span></div>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </>
   );

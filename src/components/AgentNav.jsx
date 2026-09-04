@@ -55,7 +55,10 @@ const AgentNav = ({ agents, activeAgent, onSelect, ease = 'power3.out' }) => {
         aria-expanded={isOpen}
         aria-label={isOpen ? 'Close agent list' : 'Open agent list'}
       >
-        <span className="agent-nav-toggle-label">AGENT CONSOLE</span>
+        <span className="agent-nav-toggle-label">
+          AGENT CONSOLE
+          {activeAgent && <span className="agent-nav-toggle-active"> — {activeAgent}</span>}
+        </span>
         <span className="hamburger-lines">
           <span className="hamburger-line" />
           <span className="hamburger-line" />

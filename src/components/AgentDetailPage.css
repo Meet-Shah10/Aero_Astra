@@ -118,6 +118,45 @@
 .dataset-line--changed .dataset-line-key { color: rgba(255, 255, 255, 0.7); }
 .dataset-line-val--changed { color: #ff6b6b; font-weight: 700; }
 
+/* Full dependency graph (SHERLOCK) — the real 6-node/18-edge graph, shown
+   separately from and above the linear causal-chain trace below it. */
+.dep-graph-section {
+  border: 1px solid rgba(255,190,90,0.25);
+  border-radius: 8px;
+  padding: 16px 18px;
+  margin-bottom: 24px;
+  background: rgba(255,190,90,0.02);
+}
+.dep-graph-section-title {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  font-weight: 700;
+  color: rgba(255,190,90,0.85);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.dep-graph-wrap {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+.dep-graph-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 10px;
+  color: rgba(255,255,255,0.65);
+}
+.dep-graph-legend div { display: flex; align-items: center; gap: 8px; }
+.dep-legend-swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
 /* Causal graph (SHERLOCK) */
 .sherlock-layout {
   display: flex;
@@ -253,6 +292,27 @@
 .oracle-bar-fill { height: 100%; background: #EDEEF2; border-radius: 999px; }
 .oracle-bar-fill--bad { background: #ff3b3b; }
 
+/* ORACLE outcome-distribution chart — full nominal/degraded/loss breakdown
+   per action, not just the recovery-rate winner. */
+.oracle-legend { display: flex; gap: 18px; font-size: 10px; color: rgba(255,255,255,0.5); margin-bottom: 14px; letter-spacing: 0.03em; }
+.oracle-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.oracle-legend-swatch { display: inline-block; width: 8px; height: 8px; border-radius: 2px; }
+.oracle-legend-swatch--nominal { background: #3ddc84; }
+.oracle-legend-swatch--degraded { background: rgba(255,200,100,0.9); }
+.oracle-legend-swatch--loss { background: #ff3b3b; }
+
+.oracle-dist { display: flex; flex-direction: column; gap: 16px; }
+.oracle-dist-row { padding: 10px 12px; border-radius: 4px; border: 1px solid transparent; transition: border-color 0.15s ease, background 0.15s ease; }
+.oracle-dist-row--winner { border-color: rgba(61, 220, 132, 0.35); background: rgba(61, 220, 132, 0.04); }
+.oracle-dist-label { display: flex; align-items: center; gap: 8px; font-size: 12px; margin-bottom: 6px; text-transform: capitalize; }
+.oracle-dist-winner-tag { font-size: 8px; letter-spacing: 0.1em; color: #3ddc84; border: 1px solid rgba(61,220,132,0.4); border-radius: 999px; padding: 2px 6px; }
+.oracle-dist-bar { display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: rgba(255,255,255,0.06); }
+.oracle-dist-seg { height: 100%; transition: width 0.3s ease; }
+.oracle-dist-seg--nominal { background: #3ddc84; }
+.oracle-dist-seg--degraded { background: rgba(255,200,100,0.9); }
+.oracle-dist-seg--loss { background: #ff3b3b; }
+.oracle-dist-meta { font-size: 10px; margin-top: 6px; color: rgba(255,255,255,0.6); }
+
 /* ATHENA options */
 .athena-options { display: flex; flex-direction: column; gap: 8px; }
 .athena-option {
@@ -304,6 +364,32 @@
   max-height: 420px;
   overflow-y: auto;
 }
+
+/* SCRIBE — audit runbook, rendered in-page (not downloaded) */
+.scribe-report { max-width: 520px; }
+.scribe-report-head { margin-bottom: 18px; }
+.scribe-section {
+  border: 1px solid var(--border-dim);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.scribe-section-title {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  font-weight: 700;
+  color: rgba(255,255,255,0.5);
+  margin-bottom: 8px;
+}
+.scribe-kv {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  padding: 4px 0;
+  color: rgba(255,255,255,0.85);
+}
+.scribe-kv span:first-child { color: rgba(255,255,255,0.45); }
+.scribe-kv span:last-child { text-transform: capitalize; }
 
 /* VITALS */
 .vitals-grid { display: flex; flex-direction: column; gap: 12px; max-width: 360px; }

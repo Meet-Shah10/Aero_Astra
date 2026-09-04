@@ -26,6 +26,11 @@
   color: rgba(255, 255, 255, 0.55);
 }
 
+.agent-nav-toggle-active {
+  color: #EDEEF2;
+  font-weight: 700;
+}
+
 .hamburger-lines {
   display: flex;
   flex-direction: column;

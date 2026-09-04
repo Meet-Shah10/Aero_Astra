@@ -109,7 +109,7 @@ The agents and their responsibilities:
 | Agent | Stage | Technology | Latency |
 |-------|-------|------------|---------|
 | **VITALS** | Continuous health scoring | Rule-based subsystem thresholds, `worst_health = min(eps, tcs, adcs)` | <1ms per frame |
-| **SENTINEL** | Anomaly detection | XGBoost (OPSSAT-AD trained) + Physics Spike Filter + Persistence Filter | <5ms per frame |
+| **SENTINEL** | Anomaly detection | XGBoost (OPSSAT-AD trained) + Physics Spike Filter + Residual Correlation Detector | <5ms per frame |
 | **SHERLOCK** | Root cause diagnosis | Claude Sonnet 4.5, temperature=0.1, constrained by NetworkX physics graph | 2–4 seconds |
 | **ORACLE** | Recovery simulation | 100-run Monte Carlo on physics digital twin, NumPy vectorized, zero LLM | 200–500ms |
 | **ATHENA** | Recovery planning | Claude Sonnet 4.5, temperature=0.15, Two-Schema anti-hallucination | 2–4 seconds |
@@ -231,25 +231,28 @@ But for this prototype, the ground-based architecture is the right choice, and i
 
 ### DEMO STEP 2 — INJECT AN ANOMALY
 
-**What to say:** "Let's inject a fault. We have three scenarios:"
+**What to say:** "Let's inject a fault. Severity sets the GUARDIAN gate — below 0.7 auto-executes (AUTOMATED_GUARDED), at or above 0.7 requires human approval (MANUAL_INTERLOCK). We have four synthetic scenarios and one historical case study."
 
-**Scenario 1: TCS Thermal Runaway (severity 0.9 — CRITICAL)**
-- What happens physically: A microcrack in the solar panel's thermal coating causes exponential runaway absorption. Panel temperature climbs at 0.17°C/second from nominal 45°C.
-- What VITALS sees: `panel_temp` crosses 49°C → `tcs_health` drops below 0.85 → `worst_health < 0.85` → CHRONICLE logs "⚠ VITALS: TCS health crossed below warning threshold"
-- What SENTINEL sees: Physics Spike Filter catches the sustained temperature acceleration — not a flatline, so XGBoost Engine A doesn't fire, but Engine B detects the monotonic drift violating expected orbital thermal cycling
-- This fault is **MANUAL_INTERLOCK** — severity 0.9 means GUARDIAN blocks autonomous execution and asks for human approval
+**Scenario 1: Thermal Runaway (TCS)**
+- What happens physically: heat pipe conductance failure reduces radiative cooling; panel equilibrium temperature target rises, dragging panel_temp up with it.
+- Detection: VITALS' `tcs_health` crosses its warning line once `panel_temp` exceeds 49°C. SENTINEL's Engine A (XGBoost flatline) or Engine B (physics spike filter) typically catches the ramp within 5–10 seconds of onset at severity 0.7–0.9.
+- Causal chain: TCS → ADCS → EPS (overtemperature stresses gyros, which drifts attitude, which de-points solar arrays).
 
-**Scenario 2: EPS Battery Degradation (severity 0.6 — MODERATE)**
-- What happens physically: Lithium-ion cell capacity loss, internal resistance rises, charging current drops
-- SENTINEL Engine A catches this: battery SoC variance drops to near-zero during charging (flatline signature) while still reporting 80% — the hallmark of a degraded cell that's not actually accepting charge
-- This fault is **AUTOMATED_GUARDED** — severity 0.6 means GUARDIAN allows autonomous execution with full logging
+**Scenario 2: Signal Dropout (TT&C)**
+- What happens physically: antenna/transponder fault drops signal strength below the -90dBm lock threshold.
+- Causal chain: TT&C → OBC (uplink loss means the onboard computer stops receiving ground commands and effectively operates blind).
 
-**Scenario 3: ADCS Reaction Wheel Degradation (severity 0.75)**  
-- What happens physically: Bearing wear in one reaction wheel. Torque output drops asymmetrically. Attitude error begins growing.
-- The chain: Wheel degrades → attitude error grows → solar panels de-point → less power → EPS health drops. This is **multi-subsystem cascade** visible in the VITALS panel — TWO subsystems show degradation from ONE fault.
-- SENTINEL's triad isolation is key: the attitude error affects only 1 axis of the magnetometer — confirms it's a hardware fault, not South Atlantic Anomaly passage (which would affect all 3 axes)
+**Scenario 3: Thruster Fault (Propulsion)**
+- What happens physically: a valve misfire generates uncontrolled torque and local heat.
+- Causal chain: Propulsion → ADCS → TCS (the disturbance torque forces ADCS to fight an unplanned rotation; the misfire's heat output also raises local temperature).
 
-**Click:** Select a scenario. Click INJECT FAULT.
+**Scenario 4: Power Cascade Failure (EPS)**
+- What happens physically: solar array output drops to zero (debris strike or deployment failure). Battery drains under full load with no recharge path.
+- Causal chain: EPS → TCS, ADCS, OBC, TT&C, Propulsion — all five subsystems lose power simultaneously. This is the fastest-onset, most severe scenario in the catalog (10-second ramp).
+
+**Historical Case Study: Sensor Fusion Failure (ADCS)** — see Step 3.5 below, it gets its own section because it's the centerpiece of the "why does this system need to exist" argument.
+
+**Click:** Select a scenario, set severity, click LAUNCH SCENARIO.
 
 ---
 
@@ -271,7 +274,7 @@ But for this prototype, the ground-based architecture is the right choice, and i
 
 #### SENTINEL Panel — Click to expand
 
-**What to say:** "SENTINEL is the anomaly detector. It has two engines — and uses real ESA data."
+**What to say:** "SENTINEL is the anomaly detector. It has three engines — and two of them use real ESA data."
 
 **Technical depth:**
 
@@ -287,7 +290,28 @@ But for this prototype, the ground-based architecture is the right choice, and i
 - Triad Isolation: magnetometers are mounted on X, Y, Z axes of the spacecraft body frame. A real attitude disturbance affects all 3. A hardware fault in 1 magnetometer affects only that axis. If only 1 of 3 axes violates, it's a hardware fault. If all 3 violate, it's an external field event (no alert needed — expected orbital environment).
 - Requires ≥ 2 spike events within a 10-frame sliding window to confirm.
 
-**WHY IS IT UNIQUE?** We trained on real satellite data (not synthetic), use a dual-engine architecture that covers both gradual degradation AND impulse events, and the triad isolation is a real technique from ESA's anomaly detection research literature. Most ML anomaly detectors would fire on every South Atlantic Anomaly passage (a real interference zone where cosmic particles temporarily affect sensors). Ours doesn't.
+**Engine C — Residual Correlation Detector**
+- Catches a failure class Engines A and B structurally cannot: two coupled telemetry channels drifting away from their own short-horizon forecast *together*, where neither channel alone crosses an absolute threshold fast enough to trip a single-channel alarm.
+- Mechanism: each channel (attitude_error, reaction_wheel_speed) gets a one-step-ahead EWMA (exponentially-weighted moving average) forecast. `residual = actual − forecast`. When both channels' residuals exceed a z-score threshold in a sustained, correlated way for 5+ consecutive frames, that's flagged as a correlation break, not independent per-channel noise.
+- This is the engine purpose-built for the sensor-fusion failure mode below — see Step 3.5.
+
+**WHY IS IT UNIQUE?** We trained Engines A and B on real satellite data (not synthetic), use a three-engine architecture that covers gradual degradation, impulse events, AND correlated multi-channel drift, and the triad isolation is a real technique from ESA's anomaly detection research literature. Most ML anomaly detectors would fire on every South Atlantic Anomaly passage (a real interference zone where cosmic particles temporarily affect sensors). Ours doesn't.
+
+---
+
+### DEMO STEP 3.5 — Historical Case Study: Sensor Fusion Failure
+
+**What to say:** "Now let's replay something that actually happened."
+
+**The incident:** JAXA's Hitomi (ASTRO-H) X-ray astronomy satellite, launched February 2016. 38 days into the mission, its inertial reference unit (IRU) reported a false rotation rate that disagreed with the star-tracker's independent attitude solution. The onboard control law trusted the IRU, commanded the reaction wheels to counter a spin that wasn't happening, and kept commanding harder as the (nonexistent) error failed to resolve. By the time ground control understood what was happening, accumulated wheel momentum had pushed the spacecraft's rotation rate past structural limits. Hitomi broke apart. Total mission loss. Source: "Fatal Software Failures in Spaceflight," MDPI Encyclopedia (2024), DOI 10.3390/encyclopedia4020061 — a peer-reviewed survey of documented spaceflight software failures.
+
+**What we built:** `adcs_sensor_fusion_failure` — a fault scenario in our physics digital twin that reproduces the same signature. A false rotation is injected as a real disturbance torque into the ADCS control law. Because the "disturbance" is fictitious, the wheel never actually corrects anything — but it's fully healthy and fully torque-capable, so it keeps working at full authority. The result, measured directly from our simulator: attitude error rises fast, then **plateaus** at a new, elevated, stable-but-wrong equilibrium (~9-10° at severity 0.9) instead of returning to the nominal ~0.2° hover — while reaction wheel speed keeps declining underneath it. That combination — a healthy wheel visibly working hard, an error that stabilizes wrong instead of correcting — is exactly the cross-channel-disagreement pattern from the real incident, not a generic "something's wrong" alarm.
+
+**What SENTINEL does with it:** Engine C's residual correlation detector catches this — empirically, in our test runs, within ~1.8 seconds of fault onset — well before VITALS' absolute attitude-error threshold would cross on its own (~5.9 seconds). Neither Engine A nor Engine B is built to catch this pattern at all; a real, non-synthetic differentiator is that Engine C exists specifically because this failure mode has no other detector.
+
+**Why this matters — the actual "so what":** Hitomi's IRU/star-tracker disagreement was, by JAXA's own investigation, detectable in principle from the telemetry — the fatal delay was in recognizing that both channels' behavior together, not either one alone, was the anomaly. If a system built to catch exactly this pattern had been watching, that anomaly would have surfaced in seconds instead of accumulating for the better part of an orbit before ground control understood what was happening. We're not claiming AERO-ASTRA definitely saves every Hitomi-class failure — we're claiming the specific gap that killed Hitomi (independent single-channel checks, no correlated-divergence detector) is a gap our architecture doesn't have, and we can show you the second-by-second data that demonstrates it.
+
+**Click:** After triggering, open SHERLOCK — the residual chart on the SENTINEL page and the dependency graph on SHERLOCK both update from this exact scenario's real physics run, not canned data.
 
 ---
 
@@ -303,6 +327,7 @@ But for this prototype, the ground-based architecture is the right choice, and i
 - Algorithm: Given flagged subsystem S, compute `candidates = {S} ∪ {all nodes with edge →S}`. This is a 1-hop reverse BFS.
 - Example: ADCS flagged → candidates = {ADCS, EPS, TCS, OBC, Propulsion} (every node that can cause ADCS failure via physical coupling)
 - This computation is deterministic and complete. Every physically possible root cause is in the candidate set. Everything outside is physically impossible.
+- **On screen:** the SHERLOCK page renders this graph directly — all 6 nodes, all 18 edges, drawn faint by default. When a fault fires, the flagged subsystem highlights red, every node with an edge pointing into it (the graph-computed candidate set) highlights amber, and the confirmed causal chain highlights green on top of that. The amber nodes that *aren't* green are the visual answer to "why did the graph even consider this subsystem, and why did it get ruled out" — they were physically reachable, the LLM's reasoning (Phase 2/3 below) just didn't land on them.
 
 **Phase 2 — LLM Reasoning (Claude Sonnet 4.5, 2–4 seconds)**
 - System prompt: You are SHERLOCK, an expert satellite systems engineer trained on ECSS fault diagnosis standards.

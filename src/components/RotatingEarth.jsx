@@ -126,12 +126,12 @@ export default function RotatingEarth({ width = 800, height = 600, className = "
       const currentScale = projection.scale()
       const scaleFactor = currentScale / radius
 
-      // Draw ocean (globe background)
+      // Draw ocean (globe background) — deep space-blue, not flat gray
       context.beginPath()
       context.arc(containerWidth / 2, containerHeight / 2, currentScale, 0, 2 * Math.PI)
-      context.fillStyle = "rgba(5, 6, 15, 0.8)" // semi-transparent dark background
+      context.fillStyle = "rgba(6, 22, 48, 0.85)" // deep ocean blue
       context.fill()
-      context.strokeStyle = "rgba(180, 180, 190, 0.4)" // gray outline
+      context.strokeStyle = "rgba(90, 160, 230, 0.4)" // pale blue rim light
       context.lineWidth = 2 * scaleFactor
       context.stroke()
 
@@ -140,7 +140,7 @@ export default function RotatingEarth({ width = 800, height = 600, className = "
         const graticule = d3.geoGraticule()
         context.beginPath()
         path(graticule())
-        context.strokeStyle = "rgba(130, 130, 140, 0.15)" // gray grid
+        context.strokeStyle = "rgba(90, 140, 200, 0.15)" // blue grid
         context.lineWidth = 1 * scaleFactor
         context.globalAlpha = 0.25
         context.stroke()
@@ -151,7 +151,7 @@ export default function RotatingEarth({ width = 800, height = 600, className = "
         landFeatures.features.forEach((feature) => {
           path(feature)
         })
-        context.strokeStyle = "rgba(160, 160, 170, 0.5)"
+        context.strokeStyle = "rgba(90, 210, 140, 0.5)" // green landmass outline
         context.lineWidth = 1 * scaleFactor
         context.stroke()
 
@@ -167,7 +167,7 @@ export default function RotatingEarth({ width = 800, height = 600, className = "
           ) {
             context.beginPath()
             context.arc(projected[0], projected[1], 1.2 * scaleFactor, 0, 2 * Math.PI)
-            context.fillStyle = "rgba(160, 160, 170, 0.85)" // gray dots
+            context.fillStyle = "rgba(80, 220, 150, 0.85)" // green land dots
             context.fill()
           }
         })
@@ -178,9 +178,11 @@ export default function RotatingEarth({ width = 800, height = 600, className = "
       try {
         setIsLoading(true)
 
-        const response = await fetch(
-          "https://raw.githubusercontent.com/martynafford/natural-earth-geojson/refs/heads/master/110m/physical/ne_110m_land.json",
-        )
+        // Bundled locally (public/ne_110m_land.json) instead of fetched from
+        // GitHub's raw CDN on every load — that round-trip alone measured
+        // ~1.5s, on top of DNS/TLS handshake variance to a third-party host
+        // with no caching. Same-origin static asset is effectively instant.
+        const response = await fetch("/ne_110m_land.json")
         if (!response.ok) throw new Error("Failed to load land data")
 
         landFeatures = await response.json()
