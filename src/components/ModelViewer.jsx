@@ -75,6 +75,7 @@ const ModelInner = ({
   lockRotation,
   lockYaw,
   lockPitch,
+  zoomTarget,
   onLoaded
 }) => {
   const outer = useRef(null);
@@ -310,6 +311,11 @@ const ModelInner = ({
     // FIX: Keep it exactly at origin (for rotation) but apply manual positional offsets
     outer.current.position.set(xOff, yOff, 0);
 
+    if (zoomTarget != null) {
+      camera.position.z = THREE.MathUtils.lerp(camera.position.z, zoomTarget, 0.05);
+      need = true;
+    }
+
     if (lockRotation) {
       // Converge to a fixed, deterministic pose instead of freezing wherever
       // autoRotate/drag last left it — so overlays anchored to the model
@@ -385,6 +391,7 @@ const ModelViewer = ({
   lockRotation = false,
   lockRotationX,
   lockRotationY,
+  zoomTarget,
   onModelLoaded
 }) => {
   useEffect(() => void useGLTF.preload(url), [url]);
@@ -496,6 +503,7 @@ const ModelViewer = ({
             lockRotation={lockRotation}
             lockYaw={lockYaw}
             lockPitch={lockPitch}
+            zoomTarget={zoomTarget}
             onLoaded={onModelLoaded}
           />
         </Suspense>

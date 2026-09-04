@@ -107,6 +107,23 @@ const CASE_STUDY_SCENARIO = {
 
 const ALL_SCENARIOS = { ...FAULT_SCENARIOS, [CASE_STUDY_SCENARIO.key]: CASE_STUDY_SCENARIO };
 
+// Per-subsystem camera focus for the anomaly-locked pose. Rough first pass —
+// offsets/zoom are tuned against the current low-poly satellite GLB, not
+// anchored to named mesh parts yet (labels/precise anchoring come later).
+// TT&C and ADCS (sensor fusion) both focus the comms dish since the Hitomi
+// case study is an IRU/attitude sensing fault read through that same view.
+// modelXOffset/modelYOffset are world-space units at the model's z=0 plane —
+// at a close zoomTarget the camera's visible half-width shrinks to roughly
+// zoom * tan(25deg) ≈ zoom * 0.47, so offsets have to shrink along with zoom
+// or the model gets shoved clean out of frame (learned the hard way: 0.55
+// offset at zoom 0.45 pushed the satellite entirely off-screen).
+const ANOMALY_FOCUS = {
+  'TT&C': { rotX: 8, rotY: 90, zoom: 0.55, xOff: -0.12, yOff: 0 },
+  'ADCS': { rotX: 8, rotY: 90, zoom: 0.55, xOff: -0.12, yOff: 0 },
+  'TCS': { rotX: 8, rotY: 90, zoom: 0.55, xOff: 0.14, yOff: 0 },
+  'Propulsion': { rotX: 12, rotY: -60, zoom: 0.55, xOff: 0, yOff: 0.03 },
+};
+
 const BASELINE_TELEMETRY = {
   altitude: '540 km | 7.5 km/s',
   epsLoad: '32%',
@@ -642,6 +659,7 @@ function App() {
   };
 
   const isAnomaly = scenarioPhase !== 'nominal' && scenarioPhase !== 'resolved';
+  const anomalyFocus = activeScenario ? ANOMALY_FOCUS[activeScenario.subsystem] : null;
   // Distinct from isAnomaly: stays true through 'resolved' so agent tabs
   // keep showing the run's real data instead of snapping back to "Standby"
   // the moment it resolves. AUTOMATED_GUARDED scenarios auto-resolve in
@@ -1174,10 +1192,12 @@ function App() {
               defaultZoom={0.8}
               defaultRotationX={20}
               defaultRotationY={-50}
-              modelXOffset={isAnomaly ? -0.16 : 0}
+              modelXOffset={isAnomaly ? (anomalyFocus?.xOff ?? -0.16) : 0}
+              modelYOffset={isAnomaly ? (anomalyFocus?.yOff ?? 0) : 0}
+              zoomTarget={isAnomaly ? (anomalyFocus?.zoom ?? 0.8) : null}
               lockRotation={isAnomaly}
-              lockRotationX={8}
-              lockRotationY={90}
+              lockRotationX={anomalyFocus?.rotX ?? 8}
+              lockRotationY={anomalyFocus?.rotY ?? 90}
               showScreenshotButton={false}
             />
           </div>
