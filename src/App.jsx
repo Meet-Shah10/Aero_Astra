@@ -9,6 +9,7 @@ import BorderGlow from './components/BorderGlow';
 import TargetCursor from './components/TargetCursor';
 import OrbitSatellite from './components/OrbitSatellite';
 import VitalsCluster from './components/vitals/VitalsCluster';
+import AnomalyLabels from './components/AnomalyLabels';
 import { useGLTF } from '@react-three/drei';
 import './index.css';
 
@@ -1179,6 +1180,11 @@ function App() {
               <span className={`status-indicator${isAnomaly ? ' red' : ''}`} />
               ORACLE: DIGITAL TWIN LIVE
             </div>
+            <AnomalyLabels
+              subsystem={activeScenario?.subsystem}
+              active={isAnomaly}
+              scenarioKey={activeScenario?.key}
+            />
             <ModelViewer
               url="/simple_satellite_low_poly_free.glb"
               width="100%"

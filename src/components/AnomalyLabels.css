@@ -1,0 +1,86 @@
+.anomaly-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.anomaly-labels-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.anomaly-labels-line {
+  stroke: rgba(56, 189, 248, 0.65);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  stroke-dasharray: 3 3;
+}
+
+.anomaly-labels-anchor {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  border-radius: 50%;
+  background: #38bdf8;
+  box-shadow: 0 0 8px 2px rgba(56, 189, 248, 0.7);
+}
+
+.anomaly-labels-anchor-ping {
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 1px solid rgba(56, 189, 248, 0.6);
+  animation: anomaly-ping 1.6s ease-out infinite;
+}
+
+@keyframes anomaly-ping {
+  0% { transform: scale(0.6); opacity: 0.9; }
+  100% { transform: scale(2.2); opacity: 0; }
+}
+
+.anomaly-labels-stack {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transform: translate(-50%, -100%);
+}
+
+.anomaly-label-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 10px;
+  background: rgba(8, 20, 32, 0.82);
+  border: 1px solid rgba(56, 189, 248, 0.55);
+  border-radius: 4px;
+  backdrop-filter: blur(2px);
+  white-space: nowrap;
+}
+
+.anomaly-label-chip-text {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: #7dd3fc;
+}
+
+.anomaly-label-chip-sub {
+  font-family: var(--font-mono, monospace);
+  font-size: 9px;
+  color: #94a3b8;
+  letter-spacing: 0.04em;
+}
+
+.anomaly-label-chip--danger {
+  border-color: rgba(255, 59, 59, 0.6);
+}
+
+.anomaly-label-chip--danger .anomaly-label-chip-text {
+  color: #ff6b6b;
+}
