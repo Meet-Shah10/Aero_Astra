@@ -7,6 +7,7 @@ import AgentNav from './components/AgentNav';
 import AgentDetailPage from './components/AgentDetailPage';
 import BorderGlow from './components/BorderGlow';
 import TargetCursor from './components/TargetCursor';
+import OrbitSatellite from './components/OrbitSatellite';
 import './index.css';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -586,6 +587,8 @@ function App() {
         justifyContent: 'center',
       }}>
         <RotatingEarth width={window.innerWidth} height={window.innerHeight} isRotating={!showDashboard} />
+        {/* Satellite orbiting around the globe — only on landing page */}
+        {!launched && <OrbitSatellite count={1} radiusX={340} radiusY={100} rotation={-12} duration={18} itemSize={70} />}
       </div>
 
       {/* ══════════════════════════════════════════════════════

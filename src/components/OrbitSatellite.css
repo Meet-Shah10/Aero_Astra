@@ -1,0 +1,48 @@
+/* OrbitSatellite styles — overlay on top of the globe */
+
+.orbit-sat-container {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 15; /* above globe (z:1) but below landing-main (z:20) */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.orbit-sat-scaling {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+.orbit-sat-scaling--responsive {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform-origin: center center;
+}
+
+.orbit-sat-rotation {
+  width: 100%;
+  height: 100%;
+  transform-origin: center center;
+  position: relative;
+}
+
+.orbit-sat-path-svg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.orbit-sat-item {
+  position: absolute;
+  will-change: transform;
+  user-select: none;
+  pointer-events: none;
+  /* Glow effect around the satellite */
+  filter: drop-shadow(0 0 8px rgba(0, 255, 136, 0.3));
+}
