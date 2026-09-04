@@ -13,23 +13,6 @@ import './index.css';
 
 useGLTF.preload('/simple_satellite_low_poly_free.glb');
 
-// Fault-detail zoom: when a scenario is active, swap the full satellite for
-// a close-up of the specific faulting subsystem's hardware, tinted red.
-// Parts are NASA's own public-domain Satellite Kit (nasa/NASA-3D-Resources
-// on GitHub) — bundled locally, same reasoning as every other asset in this
-// project (no runtime CDN dependency). TCS/ADCS/Propulsion don't have a
-// dedicated part in the kit (thermal control, reaction wheels, and thrusters
-// are internal/not separately modeled), so they each get a different body
-// bus variant for visual distinction rather than literally the same asset.
-const SUBSYSTEM_PART_MAP = {
-  EPS: { url: '/satellite_parts/wings_2.glb', label: 'Solar Array' },
-  'TT&C': { url: '/satellite_parts/radio_2.glb', label: 'Communication Dish' },
-  TCS: { url: '/satellite_parts/body_1.glb', label: 'Thermal Bus' },
-  ADCS: { url: '/satellite_parts/body_2.glb', label: 'Attitude Control Bus' },
-  Propulsion: { url: '/satellite_parts/body_3.glb', label: 'Propulsion Bus' },
-};
-Object.values(SUBSYSTEM_PART_MAP).forEach(p => useGLTF.preload(p.url));
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Agent roster — plain-English descriptions sourced verbatim from pitch.md's
@@ -665,10 +648,6 @@ function App() {
   // nothing even though a real simulation had just run.
   const hasIncidentData = scenarioPhase !== 'nominal';
 
-  // Fault-detail zoom: which hardware part to show close-up, tinted red,
-  // in place of the full satellite while an anomaly is active.
-  const activePart = (isAnomaly && activeScenario) ? SUBSYSTEM_PART_MAP[activeScenario.subsystem] : null;
-
   // Live telemetry for the sidebar TELEMETRY_ROWS display.
   // Priority:
   //   1. Real backend WS telemetry (backendData.telemetry) when backend is online
@@ -1181,15 +1160,8 @@ function App() {
               <span className={`status-indicator${isAnomaly ? ' red' : ''}`} />
               ORACLE: DIGITAL TWIN LIVE
             </div>
-            {activePart && (
-              <div className="fault-part-label">
-                <span className="fault-part-label-dot" />
-                {SUBSYSTEM_PART_MAP[activeScenario.subsystem].label.toUpperCase()} — FAULT ISOLATED
-              </div>
-            )}
             <ModelViewer
-              key={activePart ? activePart.url : 'full-satellite'}
-              url={activePart ? activePart.url : '/simple_satellite_low_poly_free.glb'}
+              url="/simple_satellite_low_poly_free.glb"
               width="100%"
               height="100%"
               autoRotate={!isAnomaly}
@@ -1198,12 +1170,10 @@ function App() {
               enableMouseParallax={!isAnomaly}
               enableHoverRotation={!isAnomaly}
               environmentPreset="warehouse"
-              autoFrame={!!activePart}
-              tintColor={activePart ? '#ff2a2a' : undefined}
               defaultZoom={0.8}
               defaultRotationX={20}
               defaultRotationY={-50}
-              modelXOffset={activePart ? 0 : isAnomaly ? -0.16 : 0}
+              modelXOffset={isAnomaly ? -0.16 : 0}
               lockRotation={isAnomaly}
               lockRotationX={8}
               lockRotationY={90}
