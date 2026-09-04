@@ -260,6 +260,28 @@ function App() {
   const [guardianTier, setGuardianTier] = useState(null); // 'AUTOMATED_GUARDED' | 'MANUAL_INTERLOCK'
   const [showDiff, setShowDiff] = useState(false);
 
+  // ── Real backend WebSocket state ──
+  // wsRef keeps one persistent connection open while the dashboard is visible.
+  // backendData holds the latest messages from each agent as they arrive.
+  const wsRef = useRef(null);
+  // executeRunbook() is called from inside the WebSocket onmessage closure
+  // (AUTOMATED_GUARDED / AUTONOMOUS_SAFED auto-execute paths), which is
+  // created once when the dashboard mounts and would otherwise always see
+  // activeScenario as it was at that moment (null) — a stale closure. This
+  // ref is kept in sync on every launch/reset so the WS-driven auto-execute
+  // path always reads the real current scenario.
+  const activeScenarioRef = useRef(null);
+  const [backendOnline, setBackendOnline] = useState(false);
+  const [backendData, setBackendData] = useState({
+    sentinel: null,    // { triggered_engine, timestamp }
+    sherlock: null,    // { primary_root_cause, causal_chain, urgency, confidence_score, time_to_critical }
+    oracle: null,      // { best_action, top_score, mode }
+    athena: null,      // { recommended_action, rationale }
+    guardian: null,    // { status, action_taken }
+    telemetry: null,   // { subsystems: { ADCS, EPS } }
+    vitals: null,      // { worst_health, ... }
+  });
+
   const loadMessages = [
     '> BOOT: AERO-ASTRA MISSION CONTROL v2.5',
     '> SENTINEL: Initializing anomaly detection engine...',
@@ -270,7 +292,106 @@ function App() {
     '> SCRIBE: Audit trail ready. All agents online.',
   ];
 
-  // ── Launch sequence (exactly like orbital-tomb) ──
+  // ── WebSocket connection: open when dashboard is shown, close when not ──
+  useEffect(() => {
+    if (!showDashboard) return;
+
+    const WS_URL = 'ws://localhost:8000/ws';
+    let ws;
+    let reconnectTimer;
+
+    const connect = () => {
+      ws = new WebSocket(WS_URL);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        setBackendOnline(true);
+        setLogs(prev => [...prev, '> BACKEND: WebSocket connected — real telemetry streaming.']);
+      };
+
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          switch (msg.type) {
+            case 'telemetry':
+              setBackendData(prev => ({ ...prev, telemetry: msg }));
+              break;
+            case 'vitals_update':
+              setBackendData(prev => ({ ...prev, vitals: msg.payload }));
+              break;
+            case 'sentinel_alert':
+              setBackendData(prev => ({ ...prev, sentinel: msg }));
+              setScenarioPhase(p => p === 'nominal' ? 'detected' : p);
+              setLogs(prev => [...prev,
+                `> ⚠ SENTINEL: Anomaly detected via ${msg.triggered_engine}`,
+              ]);
+              break;
+            case 'sherlock_diagnosis':
+              setBackendData(prev => ({ ...prev, sherlock: msg }));
+              setScenarioPhase(p => (p === 'detected' || p === 'nominal') ? 'diagnosing' : p);
+              setLogs(prev => [...prev,
+                `> SHERLOCK: Root cause → ${msg.primary_root_cause}`,
+                `> SHERLOCK: Urgency ${msg.urgency}, TTC ${msg.time_to_critical}min`,
+              ]);
+              break;
+            case 'oracle_simulation':
+              setBackendData(prev => ({ ...prev, oracle: msg }));
+              setScenarioPhase(p => (p === 'diagnosing' || p === 'detected') ? 'planning' : p);
+              setLogs(prev => [...prev,
+                `> ORACLE: Best action → ${msg.best_action} (score ${msg.top_score?.toFixed(2)})`,
+              ]);
+              break;
+            case 'athena_plan':
+              setBackendData(prev => ({ ...prev, athena: msg }));
+              setLogs(prev => [...prev,
+                `> ATHENA: Plan → ${msg.recommended_action}`,
+              ]);
+              break;
+            case 'guardian_action':
+              setBackendData(prev => ({ ...prev, guardian: msg }));
+              setGuardianTier(msg.status);
+              if (msg.status === 'AUTOMATED_GUARDED') {
+                setGuardianApproved(true);
+                setScenarioPhase('awaiting_approval');
+                setLogs(prev => [...prev, '> GUARDIAN: AUTOMATED_GUARDED — executing recovery.']);
+                setTimeout(() => executeRunbook(activeScenarioRef.current), 900);
+              } else if (msg.status === 'MANUAL_INTERLOCK') {
+                setScenarioPhase('awaiting_approval');
+                setLogs(prev => [...prev, '> GUARDIAN: MANUAL_INTERLOCK — awaiting human approval.']);
+              } else if (msg.status === 'AUTONOMOUS_SAFED') {
+                setGuardianApproved(true);
+                setScenarioPhase('awaiting_approval');
+                setLogs(prev => [...prev, '> GUARDIAN: AUTONOMOUS_SAFED — critical threshold crossed, acting immediately.']);
+                setTimeout(() => executeRunbook(activeScenarioRef.current), 300);
+              }
+              break;
+            default:
+              break;
+          }
+        } catch (_) {}
+      };
+
+      ws.onclose = () => {
+        setBackendOnline(false);
+        // Auto-reconnect after 3s
+        reconnectTimer = setTimeout(connect, 3000);
+      };
+
+      ws.onerror = () => {
+        setBackendOnline(false);
+        ws.close();
+      };
+    };
+
+    connect();
+    return () => {
+      clearTimeout(reconnectTimer);
+      if (wsRef.current) wsRef.current.close();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showDashboard]);
+
+  // ── Launch sequence ──
   // 1. Set launched=true → Scene3D camera starts dollying in
   // 2. After 800ms show the loader panel
   // 3. After 3000ms total → show dashboard
@@ -301,6 +422,7 @@ function App() {
     setGuardianApproved(false);
     setSelectedMitigation(1);
     setActiveScenario(null);
+    activeScenarioRef.current = null;
     setActiveSeverity(null);
     setGuardianTier(null);
     setShowDiff(false);
@@ -315,48 +437,68 @@ function App() {
     setShowScenarioPicker(true);
   };
 
-  // Launches the chosen scenario. Severity decides which of GUARDIAN's two
-  // real outcomes plays out — see roadmap.md's MVP section: same 3 verified
-  // faults, same pipeline, branching only on how dangerous the situation is.
+  // Launches the chosen scenario — calls real backend POST /trigger,
+  // then state is driven by incoming WebSocket messages above.
+  // The mock liveOverride still fills in for telemetry fields not yet streamed.
   const launchScenario = () => {
     const scenario = FAULT_SCENARIOS[pendingScenario];
     const severity = pendingSeverity;
-    const isHighRisk = severity >= HIGH_RISK_SEVERITY_THRESHOLD;
 
     setShowScenarioPicker(false);
     setActiveScenario(scenario);
+    activeScenarioRef.current = scenario;
     setActiveSeverity(severity);
     setShowDiff(false);
-    setScenarioPhase('detected');
-    setLogs(prev => [...prev,
-      `> ⚠ WARN: Anomaly detected at ${scenario.subsystem}.`,
-      `> SENTINEL: Correlation threshold exceeded (severity ${severity.toFixed(2)}).`,
-    ]);
+    // Reset any previous backend data from the last run
+    setBackendData({ sentinel: null, sherlock: null, oracle: null, athena: null, guardian: null, telemetry: null, vitals: null });
+    setScenarioPhase('nominal');
+    setGuardianTier(null);
+    setGuardianApproved(false);
 
-    setTimeout(() => {
-      setScenarioPhase('diagnosing');
+    // Call real backend — kicks off the physics simulation + full agent pipeline.
+    // Falls back silently if backend is offline (keeps the UI usable in demo mode).
+    fetch('http://localhost:8000/trigger', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fault_name: scenario.faultId, severity }),
+    }).then(r => r.json()).then(data => {
       setLogs(prev => [...prev,
-        '> SHERLOCK: Building causal dependency graph...',
-        `> SHERLOCK: Root cause isolated → ${scenario.causalChain.join(' → ')}.`,
+        `> BACKEND: Scenario "${scenario.label}" injected (severity ${severity.toFixed(2)}).`,
+        '> SENTINEL: Starting physics simulation + anomaly scoring...',
       ]);
+    }).catch(() => {
+      // Backend offline — fall back to the original mock timer cascade
+      setLogs(prev => [...prev,
+        '> ⚠ BACKEND OFFLINE: Running in mock mode (no real pipeline).',
+        `> ⚠ WARN: Anomaly detected at ${scenario.subsystem}.`,
+      ]);
+      setScenarioPhase('detected');
       setTimeout(() => {
-        setScenarioPhase('planning');
-        setLogs(prev => [...prev, '> ATHENA: Generating recovery options.', '> QUARTERMASTER: Sandboxing mitigation options...']);
+        setScenarioPhase('diagnosing');
+        setLogs(prev => [...prev,
+          '> SHERLOCK: Building causal dependency graph...',
+          `> SHERLOCK: Root cause isolated → ${scenario.causalChain.join(' → ')}.`,
+        ]);
         setTimeout(() => {
-          if (isHighRisk) {
-            setGuardianTier('MANUAL_INTERLOCK');
-            setScenarioPhase('awaiting_approval');
-            setLogs(prev => [...prev, '> GUARDIAN: HIGH severity → MANUAL_INTERLOCK. Safety gate locked, awaiting human approval.']);
-          } else {
-            setGuardianTier('AUTOMATED_GUARDED');
-            setGuardianApproved(true);
-            setLogs(prev => [...prev, '> GUARDIAN: Low severity → AUTOMATED_GUARDED. Executing without waiting for approval.']);
-            setScenarioPhase('awaiting_approval');
-            setTimeout(() => executeRunbook(scenario), 900);
-          }
+          setScenarioPhase('planning');
+          setLogs(prev => [...prev, '> ATHENA: Generating recovery options.']);
+          setTimeout(() => {
+            const isHighRisk = severity >= HIGH_RISK_SEVERITY_THRESHOLD;
+            if (isHighRisk) {
+              setGuardianTier('MANUAL_INTERLOCK');
+              setScenarioPhase('awaiting_approval');
+              setLogs(prev => [...prev, '> GUARDIAN: HIGH severity → MANUAL_INTERLOCK.']);
+            } else {
+              setGuardianTier('AUTOMATED_GUARDED');
+              setGuardianApproved(true);
+              setScenarioPhase('awaiting_approval');
+              setLogs(prev => [...prev, '> GUARDIAN: AUTOMATED_GUARDED — executing.']);
+              setTimeout(() => executeRunbook(scenario), 900);
+            }
+          }, 3000);
         }, 3000);
       }, 3000);
-    }, 3000);
+    });
   };
 
   const handleApprove = (e) => {
@@ -366,7 +508,14 @@ function App() {
   };
 
   const executeRunbook = (scenarioOverride) => {
-    const scenario = scenarioOverride || activeScenario;
+    // Fall back to a generic placeholder rather than crashing — this can be
+    // reached from the WebSocket auto-execute path where no local scenario
+    // was ever set locally (e.g. backend fires a real alert independent of
+    // the frontend's own picker flow).
+    const scenario = scenarioOverride || activeScenario || {
+      label: 'Detected Anomaly', faultId: 'unknown', subsystem: 'affected subsystem',
+      rootCause: 'unknown', causalChain: ['unknown'],
+    };
     setScenarioPhase('executing');
     setLogs(prev => [...prev,
     `> SCRIBE: Executing Option ${selectedMitigation}.`,
@@ -500,6 +649,10 @@ function App() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '9px', color: 'rgba(255,255,255,0.5)', fontFamily: 'monospace' }}>
           SIGNAL: <span style={{ color: '#00FF88', fontWeight: 'bold' }}>LINK_NOMINAL</span>
+          &nbsp;|&nbsp;
+          BACKEND: <span style={{ color: backendOnline ? '#00FF88' : '#ff4444', fontWeight: 'bold' }}>
+            {backendOnline ? '● LIVE' : '○ OFFLINE'}
+          </span>
         </div>
       </div>
     </header>
@@ -808,6 +961,8 @@ function App() {
             liveTelemetry={liveTelemetry}
             BASELINE_TELEMETRY={BASELINE_TELEMETRY}
             TELEMETRY_ROWS={TELEMETRY_ROWS}
+            backendOnline={backendOnline}
+            backendData={backendData}
           />
         ) : (
         <>

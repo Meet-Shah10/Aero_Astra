@@ -44,10 +44,12 @@ Expect ~5 frames printed... actually 61 frames (duration/dt + 1), panel_temp cli
 | `backend/sentinel/engine_b.py` | ✅ Built, tested | Physics-threshold detector, zero training. Fires correctly on the 3 MVP-ready faults (§3), zero false positives on a nominal run. `combined_score(ml_score, state)` returns `max(ml, engine_b)` and works even if `ml_score` is `None` (i.e. the `.pkl` failed to load) — this is your fallback path if a teammate's model file is broken on their machine. |
 | `backend/sherlock/simulator_provider.py` | ✅ Built, smoke-tested | `SimulatorTelemetryProvider(state)` — wraps a live `SatelliteState` for SHERLOCK. Use this instead of `MockTelemetryProvider` once you're feeding it real simulator frames. |
 | `backend/oracle/agent.py` | ✅ Fully wired already | `run_oracle(request)` works today. Has a fallback mode: if `proposed_actions` is omitted, it tests every `RECOVERY_CATALOG` action and ranks them — meaning **ORACLE can be demoed correctly before ATHENA exists.** Import and call it directly; do not rebuild any part of it. |
-| `backend/sherlock/agent.py` | ✅ Built | Graph-constrained (18 real edges in `graph.py`), 3-retry JSON validation. Needs `OPENROUTER_API_KEY`. |
-| `backend/api.py` | ❌ **Does not exist** | This is the only real blocker. Nothing above reaches the frontend until this exists. |
-| `backend/guardian.py`, `vitals.py`, `chronicle.py`, `athena/`, `quartermaster.py`, `scribe.py` | ❌ Not built | Build order in §4. |
-| `backend/requirements.txt` | ✅ Exists now | Didn't before. Pinned from actually grepping every import in `backend/`. |
+| `backend/sherlock/agent.py` | ✅ Built | Graph-constrained (18 real edges in `graph.py`), 3-retry JSON validation. Needs `OPENROUTER_API_KEY`. Runs in graceful offline-stub mode if the key is missing (see §5) — confirmed this does not crash the pipeline. |
+| `backend/api.py` | ✅ **Built and verified live end-to-end** | No longer the blocker — confirmed working via a real browser session against a real running server: fault injected → SENTINEL fired → SHERLOCK stub diagnosed → GUARDIAN computed the correct tier → human approved → runbook executed → system returned to nominal. See §5 for the exact wire contract and the 3 real crash bugs found and fixed getting here. |
+| `backend/vitals/agent.py` | ✅ Built, recalibrated, verified live | `calculate_vitals(state)` — real heuristic health scores from telemetry only (no fault-label shortcuts). Recalibrated this pass: `panel_temp` warn line moved from 85°C (never fired in a 600s demo run) to 49°C, verified zero false positives across 7 random seeds. Also added `worst_health = min(eps, tcs, adcs)` since the averaged `system_health` was masking single-subsystem failures. |
+| `backend/guardian.py` (inline in `api.py`, not a separate file) | ✅ Built, verified live | 3-tier logic matches §4.2 below almost exactly — implemented directly inside `simulate_stream()` rather than as a standalone module. Confirmed live: severity 0.7 fault correctly produced `MANUAL_INTERLOCK`, severity 0.3 correctly produced a different tier (test both before assuming which path a demo run will take — see §5). |
+| `backend/chronicle.py`, `quartermaster.py`, `scribe.py` | ❌ Not built | Frontend has a placeholder `CHRONICLE`/`QUARTERMASTER`/`SCRIBE` UI already; backend doesn't broadcast these message types yet. Build order in §4, Phases 5-6. |
+| `backend/requirements.txt` | ✅ Exists now | Didn't before. Pinned from actually grepping every import in `backend/`. Now also includes `python-dotenv` (api.py calls `load_dotenv()` on import). |
 
 ---
 
@@ -193,16 +195,43 @@ Jinja2 template over the full pipeline output → markdown runbook. One small Cl
 
 // 2. vitals_update — also broadcast every second, real calculate_vitals() output
 {"type": "vitals_update", "timestamp": 42.0,
- "payload": {"eps_health": 0.97, "tcs_health": 1.0, "adcs_health": 1.0, "system_health": 0.99}}
+ "payload": {"eps_health": 0.97, "tcs_health": 1.0, "adcs_health": 1.0,
+             "system_health": 0.99, "worst_health": 0.97}}
+// NOTE: "worst_health" = min(eps, tcs, adcs) was added this pass. SENTINEL's
+// fallback trigger (see #3 below) now watches worst_health, not system_health
+// — the averaged system_health was masking a single fully-degraded subsystem
+// (e.g. TCS at 0.0 with EPS/ADCS healthy averages to 0.67, never crossing
+// any reasonable alert threshold). Thresholds recalibrated in vitals/agent.py
+// this pass too: panel_temp warn line moved 85°C → 49°C (85°C never fired
+// within a real 600s demo run; verified thermal_runaway now reliably fires,
+// zero false positives across 7 random seeds on a nominal run).
 
 // 3. sentinel_alert — fires once per triggered run (rising-edge latch, not repeated)
 {"type": "sentinel_alert", "is_anomaly": true,
  "triggered_engine": "Engine A (Telemetry)",  // or "Engine B (Physics)" or "BOTH"
- "timestamp": 87.0}
-// NOTE: no anomaly_id, no score field, no flagged_subsystem — earlier drafts of
-// this doc invented these. SENTINEL currently always hardcodes flagged_subsystem
-// to "EPS" internally when building the AnomalyEvent for SHERLOCK (see roadmap.md
-// §2/§4 — same limitation noted there), regardless of which fault is actually running.
+ "timestamp": 87.0, "false_positive": false}
+// NOTE: no anomaly_id, no score field, no flagged_subsystem sent over the wire —
+// earlier drafts of this doc invented these. flagged_subsystem IS now correctly
+// derived server-side (via FAULT_SUBSYSTEM_MAP, see below) when building the
+// AnomalyEvent passed to SHERLOCK — it just isn't broadcast on this message.
+// "false_positive" is new this pass: true when this fires with no fault
+// actually injected (a real, still-open issue — Engine B's spike filter is
+// noisy and can fire on pure nominal telemetry, see §6). When true, api.py
+// intentionally skips diagnosis/oracle/athena entirely (there's nothing real
+// to diagnose) — this used to crash the whole background task with
+// `KeyError: 'unknown'` inside ORACLE's fault-catalog lookup; caught by
+// actually running the auto-started nominal stream at server boot, not by
+// code review. Frontend does not yet branch on this flag — a false positive
+// currently displays identically to a real detection.
+
+// 3.5 AnomalyEvent (server-internal, not broadcast, but worth knowing about):
+// building this object used to crash the entire streaming pipeline on every
+// single anomaly, for every fault, with or without an API key — it was
+// missing two Pydantic-required fields (flagged_parameter, confidence_score).
+// Also fixed: flagged_subsystem was hardcoded to "EPS" regardless of which
+// fault actually fired; now looked up per-fault via FAULT_SUBSYSTEM_MAP
+// (api.py, top of file) so SHERLOCK gets told the right subsystem for all
+// 6 simulator faults, not just eps_* ones.
 
 // 4. sherlock_diagnosis
 {"type": "sherlock_diagnosis", "primary_root_cause": "TCS",
@@ -211,13 +240,30 @@ Jinja2 template over the full pipeline output → markdown runbook. One small Cl
 // NOTE: field is "time_to_critical", not "time_to_critical_estimate_minutes" —
 // api.py renames it when building the message. No reasoning/graph_candidate_set/
 // llm_attempts fields are sent over the wire even though SherlockDiagnosis has them.
+// If OPENROUTER_API_KEY is unset, SherlockAgent() is never instantiated (used to
+// hard-crash the whole streaming task on startup) — instead a stub diagnosis is
+// used: primary_root_cause=<fault name>, confidence_score=0.0, urgency=HIGH if
+// severity>=0.7 else MEDIUM, reasoning explicitly says "SHERLOCK offline". This
+// is what the pipeline runs as in any environment without a key, including
+// wherever you're reading this from unless you've exported one.
 
 // 5. guardian_action — NOT "guardian". Fires right after sherlock_diagnosis.
 {"type": "guardian_action", "status": "MANUAL_INTERLOCK",  // or AUTOMATED_GUARDED / AUTONOMOUS_SAFED
  "action_taken": null}  // non-null only for AUTONOMOUS_SAFED, e.g. "shed_nonessential_load"
 // NOTE: there is no separate "approve" endpoint or "guardian_executed" follow-up
 // message yet — GUARDIAN's decision is informational only right now, nothing in
-// api.py currently blocks on or reacts to a frontend approval click.
+// api.py currently blocks on or reacts to a frontend approval click (the human
+// approval step, and the AUTOMATED_GUARDED/AUTONOMOUS_SAFED auto-execute, are
+// both purely frontend-local UI state — src/App.jsx just switches on `status`).
+// Verified live in a browser this pass, both branches:
+//   - severity 0.7 fault → urgency HIGH (stub) → MANUAL_INTERLOCK, confirmed
+//     correctly rendered, approval checkbox unlocks, EXECUTE RUNBOOK works.
+//   - severity 0.3 fault → not HIGH/CRITICAL → AUTOMATED_GUARDED, auto-executes.
+//     This path was crashing the entire frontend (blank page) until this pass —
+//     src/App.jsx's WebSocket onmessage handler called executeRunbook() from a
+//     stale closure that always saw activeScenario as null (the value it had
+//     when the WS connection was first opened, before any scenario was ever
+//     picked). Fixed with a ref that's kept in sync on every launch/reset.
 
 // 6. oracle_simulation — NOT "oracle". Broadcast from a background task after
 //    sentinel_alert/sherlock_diagnosis, does not block the telemetry stream.
@@ -225,14 +271,19 @@ Jinja2 template over the full pipeline output → markdown runbook. One small Cl
  "top_score": 0.84, "mode": "ranking"}
 // NOTE: none of ORACLE's actual per-action Monte Carlo results (nominal_recovery_rate,
 // mission_loss_rate, etc.) are sent — only the single best action + its score.
+// This is real ORACLE output (not stubbed) even when SHERLOCK/ATHENA are offline —
+// run_oracle() doesn't need an API key.
 
 // 7. athena_plan — NOT "athena". Broadcast right after oracle_simulation, same
-//    background task, only if ATHENA's LLM call succeeds (silently logged + skipped
-//    if it throws, e.g. no OPENROUTER_API_KEY — no error message reaches the frontend).
+//    background task. If ATHENA has no API key, or its LLM call throws, this
+//    message is still sent (not silently dropped as an earlier draft of this
+//    doc said) with "offline_fallback": true and recommended_action set to
+//    ORACLE's best_action instead of an LLM-reasoned pick:
 {"type": "athena_plan", "recommended_action": "shed_nonessential_load",
- "rationale": "...", "estimated_recovery_time_minutes": 15}
-// NOTE: "estimated_recovery_time_minutes": 15 is a hardcoded constant in api.py
-// right now, not derived from anything. reasoningCoT/steps/options are not sent.
+ "rationale": "ATHENA offline (no OPENROUTER_API_KEY set) — falling back to ORACLE's top-ranked action with no LLM reasoning.",
+ "estimated_recovery_time_minutes": null, "offline_fallback": true}
+// When ATHENA does run successfully, estimated_recovery_time_minutes is still
+// a hardcoded 15 in api.py right now, not derived from anything real.
 
 // 8. quartermaster / scribe — do not exist. Neither agent is built, nothing
 //    broadcasts these types. Kept below as the still-aspirational target shape
@@ -260,6 +311,8 @@ Jinja2 template over the full pipeline output → markdown runbook. One small Cl
 - **`openai` package version conflicts with system `aiohttp`** in some environments (a `httpx_aiohttp` vendored-transport issue surfaced during testing). If `from openai import OpenAI` throws an `AttributeError` about `SocketTimeoutError`, pin `openai<1.55` or update `aiohttp` to match.
 - **`sentinel_production.pkl` alone is not a working detector for the demo faults.** Always route through `combined_score()` in `engine_b.py`. This is the single most important thing in this document — it's the difference between the demo working and SENTINEL silently never firing.
 - **sklearn will warn (not fail) about version mismatch** loading the `.joblib` files (trained under 1.7.2, likely running under something newer). Harmless, ignore it.
+- **The stream runs 1 simulated second per real wall-clock second** (`await asyncio.sleep(1.0)` per frame in `simulate_stream()`). This means detection latency in a live demo is real wall-clock time, not instant. Measured this pass, severity 0.7: `propulsion_thruster_fault` detects in ~24-75 real seconds — fine for a live demo. `tcs_thermal_runaway` (the flagship fault) takes **244-481 real seconds (4-8 minutes)** to cross the VITALS fallback threshold — far too slow to trigger live in front of judges. If you need thermal_runaway specifically for the demo narrative, either pre-cache a run (§4 Phase 1 already suggests this) or lower `duration`/raise severity to accelerate it; don't rely on watching it happen live at default settings.
+- **No `OPENROUTER_API_KEY` is required to run or demo the pipeline.** SHERLOCK and ATHENA both degrade gracefully to a stub/fallback (see §5, messages 4 and 7) rather than crashing. GUARDIAN's tier decision and ORACLE's Monte Carlo ranking are both real either way — only the causal-graph diagnosis text and the LLM-reasoned recovery rationale are stubbed. Good enough to fully rehearse the demo without a key; add the key before the actual judged run for real SHERLOCK/ATHENA output.
 
 ---
 
