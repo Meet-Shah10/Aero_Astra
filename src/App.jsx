@@ -8,6 +8,7 @@ import AgentDetailPage from './components/AgentDetailPage';
 import BorderGlow from './components/BorderGlow';
 import TargetCursor from './components/TargetCursor';
 import OrbitSatellite from './components/OrbitSatellite';
+import VitalsCluster from './components/vitals/VitalsCluster';
 import { useGLTF } from '@react-three/drei';
 import './index.css';
 
@@ -1261,6 +1262,8 @@ function App() {
               Simulated pass schedule — not wired to a live scheduler yet.
             </div>
           </div>
+
+          <VitalsCluster vitals={backendData.vitals} />
 
           <div className="panel" style={{ gap: '10px', display: 'flex', flexDirection: 'column' }}>
             <div className="panel-title" style={{ marginBottom: 0 }}>SYSTEM RESOURCES</div>
