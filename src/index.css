@@ -693,6 +693,46 @@ input:disabled + .slider { cursor: not-allowed; opacity: 0.5; }
   letter-spacing: 0.02em;
 }
 
+/* Mission timeline (right sidebar) */
+.mission-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.timeline-stage {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+}
+
+.timeline-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.timeline-stage--idle .timeline-label { color: rgba(255, 255, 255, 0.25); }
+
+.timeline-stage--done .timeline-dot { background: #52ff52; border-color: #52ff52; }
+.timeline-stage--done .timeline-label { color: rgba(255, 255, 255, 0.5); }
+
+.timeline-stage--active .timeline-dot {
+  background: #EDEEF2;
+  border-color: #EDEEF2;
+  box-shadow: 0 0 8px rgba(237, 238, 242, 0.6);
+  animation: blink-dots 1.2s infinite;
+}
+.timeline-stage--active .timeline-label { color: #fff; font-weight: 700; }
+
+.timeline-stage--pending .timeline-label { color: rgba(255, 255, 255, 0.3); }
+
 /* Custom scrollbar */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: var(--bg-void); }

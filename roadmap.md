@@ -3,6 +3,10 @@
 > **Ownership split, effective now:** Mohit → 100% frontend (`src/`). Backend (`backend/`) is handed off completely — whoever picks it up should read [`backend.md`](backend.md) instead of this file. This file is the frontend-facing plan and the shared contract both sides build against.
 >
 > **Last full verification pass: 2026-09-04.** Everything marked ✅ below was actually run — tests executed, empirical checks against the real simulator, not just read on the page. Everything marked 🟡 is real code that exists but has a known, measured issue. Everything marked ⬜ genuinely doesn't exist yet. Everything marked 🔴 is a confirmed bug that will visibly break the live demo if not fixed first.
+>
+> **Branch policy, effective now: only push to `mohit-rawat`.** `harsh-lal` and `main` were reset back to `92388a5` (one commit before the GUARDIAN/VITALS merge) at Mohit's explicit request — do not force-push over them again without asking. Model files were checked as part of that reset: `harsh-lal`/`main`'s tracked `sentinel_production.pkl` is still the original 132-byte broken git-lfs pointer stub from the very first audit; ours is the real 1.38MB retrained model. Nothing was lost in the reset.
+>
+> **🔴 Frontend and backend are NOT connected, as of this pass.** `src/App.jsx` has zero `WebSocket`/`fetch` calls — it reads entirely from the hardcoded `FAULT_SCENARIOS` mock object. `backend/api.py` is a real, running, tested server with a working `POST /trigger` endpoint. Nobody has wired them together yet. This is still §4 item 3 below, and it's the difference between "a lot of real code exists" and "a demo a judge can actually click through."
 
 ---
 
@@ -26,6 +30,7 @@
 - [x] SHERLOCK causal-graph animation (SVG + GSAP)
 - [x] SENTINEL side-by-side dataset comparison view
 - [x] Clicking "Dashboard" in the nav now resets back to the live 3D view instead of staying on whatever agent page was open
+- [x] Right sidebar no longer duplicates VITALS/SHERLOCK/ATHENA as detail panels (they were redundant with the AgentNav console) — replaced with MISSION TIMELINE (real-time 6-stage pipeline progress, tied to actual `scenarioPhase`) and GROUND CONTACT (orbit/pass info). SYSTEM RESOURCES kept.
 - [ ] Connected to the real `backend/api.py` WebSocket — **still 100% mocked data in `FAULT_SCENARIOS`, this is still the #1 remaining blocker to an actual live demo**
 
 **🔴 Confirmed bugs — read before your next demo run-through**

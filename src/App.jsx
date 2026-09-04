@@ -88,6 +88,21 @@ const TELEMETRY_ROWS = [
 // section — this is the branch that produces the demo's two real outcomes.
 const HIGH_RISK_SEVERITY_THRESHOLD = 0.7;
 
+// Right-sidebar mission timeline — replaces the old per-agent detail panels
+// (VITALS/SHERLOCK/ATHENA), which now live exclusively behind the AgentNav
+// console so they're not duplicated in two places. minPhaseIdx into
+// PHASE_ORDER decides when each stage lights up; ORACLE and ATHENA share an
+// index since both are conceptually active during 'planning'.
+const PHASE_ORDER = ['detected', 'diagnosing', 'planning', 'awaiting_approval', 'executing', 'resolved'];
+const MISSION_STAGES = [
+  { code: 'SENTINEL', minPhaseIdx: 0 },
+  { code: 'SHERLOCK', minPhaseIdx: 1 },
+  { code: 'ORACLE', minPhaseIdx: 2 },
+  { code: 'ATHENA', minPhaseIdx: 2 },
+  { code: 'GUARDIAN', minPhaseIdx: 3 },
+  { code: 'SCRIBE', minPhaseIdx: 4 },
+];
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Web Audio Beep
 // ─────────────────────────────────────────────────────────────────────────────
@@ -876,57 +891,34 @@ function App() {
         {/* ── RIGHT SIDEBAR ── */}
         <div className="sidebar right-panel">
           <div className="panel">
-            <div className="panel-title">AGENT: VITALS (PROACTIVE)</div>
-            <div className="data-row"><span>Subsystem Health</span><span className={isAnomaly ? 'text-red' : 'text-green'}>{isAnomaly ? 'CRITICAL' : 'OPTIMAL'}</span></div>
-            <div className="data-row"><span>EPS_SOC</span><span>{isAnomaly ? '85.2% (DEGRADING)' : '98.5%'}</span></div>
-            <div className="data-row"><span>TCS_TEMP</span><span>{isAnomaly ? '+4.2°C/hr' : 'Stable'}</span></div>
-            <div className="data-row"><span>Attitude</span><span className="text-cyan">{isAnomaly ? 'DRIFT 0.3°' : 'Nominal'}</span></div>
-            {isAnomaly && (
-              <div style={{ color: '#ff3b3b', fontSize: '11px', marginTop: '8px', border: '1px dashed #ff3b3b', padding: '6px' }}>
-                ⚠ WARNING: RUL ESTIMATE 12 ORBITS
-              </div>
-            )}
+            <div className="panel-title">MISSION TIMELINE</div>
+            <div className="mission-timeline">
+              {MISSION_STAGES.map(stage => {
+                const phaseIdx = PHASE_ORDER.indexOf(scenarioPhase);
+                const state = scenarioPhase === 'nominal' ? 'idle'
+                  : scenarioPhase === 'resolved' ? 'done'
+                  : phaseIdx > stage.minPhaseIdx ? 'done'
+                  : phaseIdx === stage.minPhaseIdx ? 'active'
+                  : 'pending';
+                return (
+                  <div key={stage.code} className={`timeline-stage timeline-stage--${state}`}>
+                    <span className="timeline-dot" />
+                    <span className="timeline-label">{stage.code}</span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
           <div className="panel flex-1">
-            <div className="panel-title">AGENT: SHERLOCK (DIAGNOSIS)</div>
-            {(scenarioPhase === 'diagnosing' || scenarioPhase === 'planning' || scenarioPhase === 'awaiting_approval' || scenarioPhase === 'executing') ? (
-              <div className="causal-graph-placeholder" style={{ flexDirection: 'column', padding: '10px', alignItems: 'flex-start', justifyContent: 'center', gap: '4px' }}>
-                <div style={{ color: '#ff3b3b', fontWeight: 'bold', marginBottom: '4px' }}>ROOT CAUSE IDENTIFIED:</div>
-                <div className="text-cyan" style={{ fontSize: '12px' }}>[{activeScenario?.rootCause}]</div>
-                {activeScenario?.causalChain.slice(1).map((node, i) => (
-                  <React.Fragment key={node}>
-                    <div style={{ margin: '2px 0', color: '#888' }}>↓ causing ↓</div>
-                    <div className="text-cyan" style={{ fontSize: '12px' }}>[{node}]</div>
-                  </React.Fragment>
-                ))}
-              </div>
-            ) : (
-              <div className="causal-graph-placeholder text-muted">
-                {scenarioPhase === 'detected' ? <span className="dot-blink">Analyzing telemetry data...</span> : 'Awaiting fault trigger...'}
-              </div>
-            )}
-          </div>
-
-          <div className="panel">
-            <div className="panel-title">AGENT: ATHENA (MITIGATION)</div>
-            {(scenarioPhase === 'planning' || scenarioPhase === 'awaiting_approval' || scenarioPhase === 'executing') ? (
-              <div>
-                <div style={{ fontSize: '11px', marginBottom: '8px', color: '#888' }}>Recommended Recovery Options:</div>
-                <div onClick={() => scenarioPhase !== 'executing' && setSelectedMitigation(1)}
-                  style={{ border: selectedMitigation === 1 ? '1px solid #EDEEF2' : '1px solid rgba(230, 232, 236, 0.45)', padding: '8px', fontSize: '11px', marginBottom: '5px', background: selectedMitigation === 1 ? 'rgba(230,232,236,0.15)' : 'rgba(230,232,236,0.06)', cursor: 'pointer' }}>
-                  1. Throttle {activeScenario?.subsystem} to Safe Limits (Safe: 98%)
-                </div>
-                <div onClick={() => scenarioPhase !== 'executing' && setSelectedMitigation(2)}
-                  style={{ border: selectedMitigation === 2 ? '1px solid #EDEEF2' : '1px solid #333', padding: '8px', fontSize: '11px', color: selectedMitigation === 2 ? '#fff' : '#777', background: selectedMitigation === 2 ? 'rgba(230,232,236,0.15)' : 'transparent', cursor: 'pointer' }}>
-                  2. Emergency Shutoff (Loss risk: 15%)
-                </div>
-              </div>
-            ) : (
-              <div className="text-muted" style={{ fontSize: '11px' }}>
-                {scenarioPhase === 'diagnosing' ? <span className="dot-blink">Waiting for Sherlock diagnosis...</span> : 'No mitigation required.'}
-              </div>
-            )}
+            <div className="panel-title">GROUND CONTACT</div>
+            <div className="data-row"><span>Next AOS</span><span className="text-cyan">{missionStart ? `T-${Math.max(0, 8 - Math.floor(((Date.now() - missionStart) / 1000) % 480 / 60))} min` : 'T-8 min'}</span></div>
+            <div className="data-row"><span>Station</span><span>SVALBARD (SG3)</span></div>
+            <div className="data-row"><span>Orbit</span><span className="text-cyan">#{missionStart ? 4127 + Math.floor((Date.now() - missionStart) / 5400000) : 4127}</span></div>
+            <div className="data-row"><span>Alt / Vel</span><span>540 km | 7.5 km/s</span></div>
+            <div className="text-muted" style={{ fontSize: '9px', marginTop: '8px', lineHeight: 1.5 }}>
+              Simulated pass schedule — QUARTERMASTER will replace this with real fleet coordination once built.
+            </div>
           </div>
 
           <div className="panel" style={{ gap: '10px', display: 'flex', flexDirection: 'column' }}>
