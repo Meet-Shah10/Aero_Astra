@@ -30,6 +30,11 @@ Thumbs.db
 # ── Large binary assets ───────────────────────────────────────────────────────
 *.glb
 *.gltf
+# Exception: NASA's own public-domain Satellite Kit parts (9 files, ~67KB
+# total combined) used for the fault-detail zoom feature — small enough and
+# essential enough (the feature is just broken without them) to track
+# directly, unlike the multi-MB satellite/orbit models above.
+!public/satellite_parts/*.glb
 
 # ── Data, model artifacts & logs (large / regenerable) ───────────────────────
 backend/data/
