@@ -114,15 +114,15 @@ const ALL_SCENARIOS = { ...FAULT_SCENARIOS, [CASE_STUDY_SCENARIO.key]: CASE_STUD
 // TT&C and ADCS (sensor fusion) both focus the comms dish since the Hitomi
 // case study is an IRU/attitude sensing fault read through that same view.
 // modelXOffset/modelYOffset are world-space units at the model's z=0 plane —
-// at a close zoomTarget the camera's visible half-width shrinks to roughly
-// zoom * tan(25deg) ≈ zoom * 0.47, so offsets have to shrink along with zoom
-// or the model gets shoved clean out of frame (learned the hard way: 0.55
-// offset at zoom 0.45 pushed the satellite entirely off-screen).
+// zoom stays pinned to the same 0.8 used nominally (matches defaultZoom
+// below) so the satellite keeps its normal on-screen size during an
+// anomaly — only rotation + a small offset shift focus toward the part,
+// no camera push-in.
 const ANOMALY_FOCUS = {
-  'TT&C': { rotX: 8, rotY: 90, zoom: 0.55, xOff: -0.12, yOff: 0 },
-  'ADCS': { rotX: 8, rotY: 90, zoom: 0.55, xOff: -0.12, yOff: 0 },
-  'TCS': { rotX: 8, rotY: 90, zoom: 0.55, xOff: 0.14, yOff: 0 },
-  'Propulsion': { rotX: 12, rotY: -60, zoom: 0.55, xOff: 0, yOff: 0.03 },
+  'TT&C': { rotX: 8, rotY: 90, zoom: 0.8, xOff: -0.2, yOff: 0 },
+  'ADCS': { rotX: 8, rotY: 90, zoom: 0.8, xOff: -0.2, yOff: 0 },
+  'TCS': { rotX: 8, rotY: 90, zoom: 0.8, xOff: 0.22, yOff: 0 },
+  'Propulsion': { rotX: 12, rotY: -60, zoom: 0.8, xOff: 0, yOff: 0.05 },
 };
 
 const BASELINE_TELEMETRY = {
