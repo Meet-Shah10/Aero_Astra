@@ -8,6 +8,7 @@ import AgentDetailPage from './components/AgentDetailPage';
 import BorderGlow from './components/BorderGlow';
 import TargetCursor from './components/TargetCursor';
 import OrbitSatellite from './components/OrbitSatellite';
+import VitalsCluster from './components/vitals/VitalsCluster';
 import { useGLTF } from '@react-three/drei';
 import './index.css';
 
@@ -936,6 +937,7 @@ function App() {
 {
   showDashboard && (
     <div className="dashboard-container fade-enter" style={{ paddingTop: '96px', paddingBottom: '36px' }}>
+      <VitalsCluster vitals={backendData.vitals} />
       {activeView === 'about' ? <AboutView /> : (
       <>
       {showScenarioPicker && (
