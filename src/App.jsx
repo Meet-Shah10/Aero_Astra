@@ -515,8 +515,10 @@ function App() {
     lastWorstHealthRef.current = 1.0;
     setActiveSeverity(severity);
     setShowDiff(false);
-    // Reset any previous backend data from the last run
-    setBackendData({ sentinel: null, sherlock: null, oracle: null, athena: null, guardian: null, telemetry: null, vitals: null });
+    // Reset agent data from the last run but KEEP residualHistory so the
+    // Sentinel chart doesn't go blank during the ~20-frame window before new
+    // residual_update messages arrive from the freshly-started stream.
+    setBackendData(prev => ({ sentinel: null, sherlock: null, oracle: null, athena: null, guardian: null, telemetry: null, vitals: null, residualHistory: prev.residualHistory ?? [] }));
     setScenarioPhase('nominal');
     setGuardianTier(null);
     setGuardianApproved(false);
@@ -597,10 +599,23 @@ function App() {
 
   const isAnomaly = scenarioPhase !== 'nominal' && scenarioPhase !== 'resolved';
 
-  // Live telemetry = baseline with the active scenario's field-level
-  // overrides applied. Same shape a real `telemetry` WS message would have
-  // (see backend.md §5) — this is the mock stand-in for that payload.
-  const liveTelemetry = { ...BASELINE_TELEMETRY, ...(isAnomaly ? activeScenario?.liveOverride : null) };
+  // Live telemetry for the sidebar TELEMETRY_ROWS display.
+  // Priority:
+  //   1. Real backend WS telemetry (backendData.telemetry) when backend is online
+  //      — converts raw numeric values to the display-string format the rows expect.
+  //   2. liveOverride mock strings from FAULT_SCENARIOS when backend is offline.
+  //   3. BASELINE_TELEMETRY as the no-fault baseline.
+  const _wsTm = backendOnline ? backendData?.telemetry : null;
+  const _realTelemetry = _wsTm ? {
+    altitude: '540 km | 7.5 km/s',  // orbit is not in the WS payload, keep static
+    epsLoad: `${(_wsTm.subsystems.EPS.battery_soc * 100).toFixed(1)}% SOC · ${_wsTm.subsystems.EPS.bus_voltage.toFixed(1)}V`,
+    cpuUsage: BASELINE_TELEMETRY.cpuUsage,  // OBC cpu not in WS subset, keep baseline
+    commLink: BASELINE_TELEMETRY.commLink,  // TTC not in WS subset, keep baseline
+    tcsTemp: BASELINE_TELEMETRY.tcsTemp,   // TCS not in WS subset, keep baseline
+  } : null;
+  const liveTelemetry = _realTelemetry
+    ? { ...BASELINE_TELEMETRY, ..._realTelemetry, ...(isAnomaly ? activeScenario?.liveOverride : null) }
+    : { ...BASELINE_TELEMETRY, ...(isAnomaly ? activeScenario?.liveOverride : null) };
 
   return (
     <div style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden' }}>

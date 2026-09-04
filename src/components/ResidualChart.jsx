@@ -56,7 +56,7 @@ function ChannelTrack({ label, unit, points, actualOf, predOf, detectAtIndex, co
           </strong>
         </span>
       </div>
-      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block', background: 'rgba(255,255,255,0.02)', borderRadius: 3 }}>
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block', background: 'rgba(255,255,255,0.02)', borderRadius: 3, minHeight: `${H}px` }}>
         <path d={bandPath} fill="rgba(255,128,128,0.12)" stroke="none" />
         <path d={predPath} fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth="1" strokeDasharray="3 3" />
         <path d={actualPath} fill="none" stroke={color} strokeWidth="1.5" />

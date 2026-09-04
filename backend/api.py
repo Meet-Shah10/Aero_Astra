@@ -528,6 +528,8 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
                     "nominal_recovery_rate": r.mc_result.nominal_recovery_rate,
                     "degraded_operation_rate": r.mc_result.degraded_operation_rate,
                     "mission_loss_rate": r.mc_result.mission_loss_rate,
+                    "mean_final_battery_soc": r.mc_result.mean_final_battery_soc,
+                    "std_final_battery_soc": r.mc_result.std_final_battery_soc,
                     "flags": r.flags,
                 }
                 for r in oracle_response.results
@@ -763,6 +765,64 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
                 # Basic reset logic: if we have 0 triggers in the window, we could reset. 
                 # For simplicity, we just leave it latched until the frontend clears it.
                 pass
+
+    # ── Continuous keep-alive after simulation frames exhaust ────────────────
+    # The 600-frame fault sim finishes in ~60 real-world seconds (0.1s/frame).
+    # Without this loop the WS connection stays open but no new residual_update
+    # or telemetry messages are sent, so the Sentinel residual chart goes blank.
+    # We regenerate short nominal batches and re-run the correlation detector
+    # to keep both charts alive until the next /trigger cancels this task.
+    #
+    # timestamp_offset: keeps frame.timestamp monotonically increasing past
+    # the end of the fault sim (600.0s), so the frontend residualHistory ring
+    # buffer has consistent timestamps and the detectAtIndex anomaly-marker
+    # lookup stays valid for the lifetime of the incident.
+    log.info("Simulation frames exhausted — entering continuous nominal keep-alive loop")
+    timestamp_offset = 600.0  # fault sim ran for 600 seconds
+    while True:
+        nom_batch = simulate_scenario(fault=None, duration=30.0, dt=1.0)
+        # Reset correlation detector EWMA once per batch so forecasts stay
+        # sensible on fresh nominal data (no stale fault residuals leaking in).
+        correlation_filter = ResidualCorrelationDetector()
+        for frame in nom_batch.frames:
+            await asyncio.sleep(0.1)
+            ts = timestamp_offset + frame.timestamp  # monotonic timestamp
+            # Telemetry
+            telemetry_msg = {
+                "type": "telemetry",
+                "timestamp": ts,
+                "subsystems": {
+                    "ADCS": {
+                        "attitude_error": frame.state.adcs.attitude_error,
+                        "reaction_wheel_speed": frame.state.adcs.reaction_wheel_speed,
+                    },
+                    "EPS": {
+                        "battery_soc": frame.state.eps.battery_soc,
+                        "bus_voltage": frame.state.eps.bus_voltage,
+                    },
+                },
+            }
+            await manager.broadcast(telemetry_msg)
+            # Vitals
+            vitals_payload = calculate_vitals(frame.state)
+            await manager.broadcast({
+                "type": "vitals_update",
+                "timestamp": ts,
+                "payload": vitals_payload,
+            })
+            # Residual update (Engine C)
+            _, err_actual, err_pred, wheel_actual, wheel_pred = correlation_filter.update(
+                frame.state.adcs.attitude_error,
+                frame.state.adcs.reaction_wheel_speed,
+            )
+            await manager.broadcast({
+                "type": "residual_update",
+                "timestamp": ts,
+                "attitude_error": {"actual": err_actual, "predicted": err_pred},
+                "reaction_wheel_speed": {"actual": wheel_actual, "predicted": wheel_pred},
+            })
+        # Advance offset past the just-completed 30s batch
+        timestamp_offset += 30.0
 
 
 def stream_task_done_callback(task):
