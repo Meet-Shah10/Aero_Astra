@@ -199,8 +199,15 @@ class PhysicsSpikeFilter:
 # forecast. When both residuals exceed a z-score threshold in the same
 # direction for several consecutive frames, that's a correlated break, not
 # independent per-channel noise.
+#
+# z_threshold=3.0 (was 2.0): recalibrated after noise.py raised attitude_error
+# process noise 5x (0.04->0.2) and battery_soc noise 8x (0.0005->0.004) for
+# ORACLE's Monte Carlo spread — at the old threshold this pushed nominal
+# false-positive rate to 30% (measured over 20 seeds). At 3.0 it's back to
+# 0/20 while still catching both adcs_sensor_fusion_failure and
+# adcs_reaction_wheel_degradation within ~2-3s of onset.
 class ResidualCorrelationDetector:
-    def __init__(self, window=15, ewma_alpha=0.3, z_threshold=2.0, min_consecutive=5):
+    def __init__(self, window=15, ewma_alpha=0.3, z_threshold=3.0, min_consecutive=5):
         self.window = window
         self.alpha = ewma_alpha
         self.z_threshold = z_threshold

@@ -78,12 +78,12 @@ log = logging.getLogger(__name__)
 # Configuration
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Google AI Studio (Gemini) — OpenAI-compatible endpoint
-# Env var: GEMINI_API_KEY  (falls back to OPENROUTER_API_KEY for backwards compat)
-DEFAULT_MODEL       = "models/gemini-2.5-flash"       # fast, capable, generous free tier
+# OpenRouter — OpenAI-compatible endpoint that proxies to Gemini and other models
+# Env var: OPENROUTER_API_KEY
+DEFAULT_MODEL       = "google/gemini-2.5-flash"      # via OpenRouter
 DEFAULT_TEMPERATURE = 0.15
 DEFAULT_MAX_RETRIES = 3
-GEMINI_BASE_URL     = "https://generativelanguage.googleapis.com/v1beta/openai/"
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 # 0.15: slightly above SHERLOCK's 0.1 — procedure prose benefits from natural
 # variation, but this is still safety-relevant; must stay below 0.2.
@@ -122,20 +122,20 @@ class AthenaAgent:
         temperature: float = DEFAULT_TEMPERATURE,
         max_retries: int = DEFAULT_MAX_RETRIES,
     ) -> None:
-        # GEMINI_API_KEY preferred; fall back to OPENROUTER_API_KEY for compat
+        # Use OPENROUTER_API_KEY
         resolved_key = (
             api_key
-            or os.environ.get("GEMINI_API_KEY")
             or os.environ.get("OPENROUTER_API_KEY")
+            or os.environ.get("GEMINI_API_KEY")
         )
         if not resolved_key:
             raise EnvironmentError(
-                "API key not found. Set GEMINI_API_KEY (Google AI Studio) "
-                "or OPENROUTER_API_KEY in environment, or pass api_key= to AthenaAgent()."
+                "API key not found. Set OPENROUTER_API_KEY in environment "
+                "or pass api_key= to AthenaAgent()."
             )
 
         self._client = OpenAI(
-            base_url=GEMINI_BASE_URL,
+            base_url=OPENROUTER_BASE_URL,
             api_key=resolved_key,
         )
         self._model       = model

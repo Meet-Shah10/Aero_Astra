@@ -233,7 +233,7 @@ def build_user_prompt(
         Complete user prompt string.
     """
     valid_names = ", ".join(
-        f'"{{r.action_name}}"' for r in oracle_response.results
+        f'"{r.action_name}"' for r in oracle_response.results
     )
 
     oracle_block = _format_oracle_results(oracle_response)
