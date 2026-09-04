@@ -8,6 +8,15 @@ import * as THREE from 'three';
 
 const isTouch = typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
 const deg2rad = d => (d * Math.PI) / 180;
+const TAU = Math.PI * 2;
+// Shortest-path angle lerp — THREE.MathUtils.lerp interpolates the raw
+// numeric value, so once autoRotate has accumulated many full turns on
+// rotation.y, locking to a target angle spins backward through every one
+// of those turns instead of just settling forward into place.
+const lerpAngle = (current, target, alpha) => {
+  const delta = ((target - current + Math.PI) % TAU + TAU) % TAU - Math.PI;
+  return current + delta * alpha;
+};
 const DECIDE = 8;
 const ROTATE_SPEED = 0.005;
 const INERTIA = 0.925;
@@ -305,8 +314,8 @@ const ModelInner = ({
       // Converge to a fixed, deterministic pose instead of freezing wherever
       // autoRotate/drag last left it — so overlays anchored to the model
       // (e.g. a fault-location marker) land on the same spot every time.
-      outer.current.rotation.y = THREE.MathUtils.lerp(outer.current.rotation.y, lockYaw, 0.05);
-      outer.current.rotation.x = THREE.MathUtils.lerp(outer.current.rotation.x, lockPitch, 0.05);
+      outer.current.rotation.y = lerpAngle(outer.current.rotation.y, lockYaw, 0.05);
+      outer.current.rotation.x = lerpAngle(outer.current.rotation.x, lockPitch, 0.05);
       vel.current.x = 0;
       vel.current.y = 0;
       need = true;
