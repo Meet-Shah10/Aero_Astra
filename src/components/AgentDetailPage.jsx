@@ -17,7 +17,8 @@ function Empty({ label }) {
   return <div className="agent-page-empty">{label}</div>;
 }
 
-function SentinelPage({ activeScenario, activeSeverity, isAnomaly, TELEMETRY_ROWS, BASELINE_TELEMETRY, liveTelemetry }) {
+function SentinelPage({ activeScenario, activeSeverity, isAnomaly, TELEMETRY_ROWS, BASELINE_TELEMETRY, liveTelemetry, backendOnline, backendData }) {
+  const liveTm = backendOnline ? backendData?.telemetry : null;
   // Metadata rows are real, derived state — not decoration. baseline is
   // always the clean-run snapshot; live reflects whatever's actually active.
   const metaRows = [
@@ -40,6 +41,13 @@ function SentinelPage({ activeScenario, activeSeverity, isAnomaly, TELEMETRY_ROW
           ? <>Correlation threshold exceeded on <strong>{activeScenario.subsystem}</strong>. Physics digital-twin baseline vs. current live snapshot — changed fields highlighted.</>
           : 'All telemetry within baseline range. Snapshots below are identical — no anomaly currently flagged.'}
       </p>
+      {liveTm && (
+        <div className="live-data-badge" style={{ marginBottom: 12 }}>
+          ● LIVE — backend/api.py 'telemetry' @ t={liveTm.timestamp}s — ADCS.attitude_error={liveTm.subsystems.ADCS.attitude_error.toFixed(3)}°,
+          ADCS.wheel={liveTm.subsystems.ADCS.reaction_wheel_speed.toFixed(1)}rpm, EPS.soc={(liveTm.subsystems.EPS.battery_soc * 100).toFixed(1)}%,
+          EPS.bus_voltage={liveTm.subsystems.EPS.bus_voltage.toFixed(2)}V
+        </div>
+      )}
       <div className="dataset-compare">
         <div className="dataset-pane">
           <div className="dataset-pane-head">PHYSICS_SIMULATOR — BASELINE.SNAPSHOT</div>
@@ -334,26 +342,58 @@ function ChroniclePage({ logs }) {
   );
 }
 
-function VitalsPage({ isAnomaly }) {
+function VitalsPage({ isAnomaly, backendOnline, backendData }) {
+  const live = backendOnline ? backendData?.vitals : null;
   return (
     <div className="vitals-grid">
-      <div className="vitals-stat">
-        <span className="vitals-stat-label">Subsystem Health</span>
-        <span className={isAnomaly ? 'text-red' : 'text-green'}>{isAnomaly ? 'CRITICAL' : 'OPTIMAL'}</span>
-      </div>
-      <div className="vitals-stat">
-        <span className="vitals-stat-label">EPS_SOC</span>
-        <span>{isAnomaly ? '85.2% (DEGRADING)' : '98.5%'}</span>
-      </div>
-      <div className="vitals-stat">
-        <span className="vitals-stat-label">TCS_TEMP</span>
-        <span>{isAnomaly ? '+4.2°C/hr' : 'Stable'}</span>
-      </div>
-      <div className="vitals-stat">
-        <span className="vitals-stat-label">Attitude</span>
-        <span>{isAnomaly ? 'DRIFT 0.3°' : 'Nominal'}</span>
-      </div>
-      {isAnomaly && <div className="vitals-warning">⚠ WARNING: RUL ESTIMATE 12 ORBITS</div>}
+      {live ? (
+        <>
+          <div className="live-data-badge">● LIVE — from backend/vitals/agent.py::calculate_vitals()</div>
+          <div className="vitals-stat">
+            <span className="vitals-stat-label">EPS Health</span>
+            <span className={live.eps_health < 0.85 ? 'text-red' : 'text-green'}>{(live.eps_health * 100).toFixed(1)}%</span>
+          </div>
+          <div className="vitals-stat">
+            <span className="vitals-stat-label">TCS Health</span>
+            <span className={live.tcs_health < 0.85 ? 'text-red' : 'text-green'}>{(live.tcs_health * 100).toFixed(1)}%</span>
+          </div>
+          <div className="vitals-stat">
+            <span className="vitals-stat-label">ADCS Health</span>
+            <span className={live.adcs_health < 0.85 ? 'text-red' : 'text-green'}>{(live.adcs_health * 100).toFixed(1)}%</span>
+          </div>
+          <div className="vitals-stat">
+            <span className="vitals-stat-label">Worst Subsystem</span>
+            <span className={live.worst_health < 0.85 ? 'text-red' : 'text-green'}>{(live.worst_health * 100).toFixed(1)}%</span>
+          </div>
+          <div className="vitals-stat">
+            <span className="vitals-stat-label">System Health (mean)</span>
+            <span>{(live.system_health * 100).toFixed(1)}%</span>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="text-muted" style={{ fontSize: 10, marginBottom: 8 }}>
+            {backendOnline ? 'Waiting for first vitals_update...' : 'Backend offline — showing simulated display values.'}
+          </div>
+          <div className="vitals-stat">
+            <span className="vitals-stat-label">Subsystem Health</span>
+            <span className={isAnomaly ? 'text-red' : 'text-green'}>{isAnomaly ? 'CRITICAL' : 'OPTIMAL'}</span>
+          </div>
+          <div className="vitals-stat">
+            <span className="vitals-stat-label">EPS_SOC</span>
+            <span>{isAnomaly ? '85.2% (DEGRADING)' : '98.5%'}</span>
+          </div>
+          <div className="vitals-stat">
+            <span className="vitals-stat-label">TCS_TEMP</span>
+            <span>{isAnomaly ? '+4.2°C/hr' : 'Stable'}</span>
+          </div>
+          <div className="vitals-stat">
+            <span className="vitals-stat-label">Attitude</span>
+            <span>{isAnomaly ? 'DRIFT 0.3°' : 'Nominal'}</span>
+          </div>
+          {isAnomaly && <div className="vitals-warning">⚠ WARNING: RUL ESTIMATE 12 ORBITS</div>}
+        </>
+      )}
     </div>
   );
 }

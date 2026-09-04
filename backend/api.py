@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
+from types import SimpleNamespace
 import sys
 import os
 from pathlib import Path
@@ -34,6 +35,20 @@ from fastapi.middleware.cors import CORSMiddleware
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("api")
+
+# Maps each backend/simulator/faults.py fault name to the (subsystem,
+# parameter) SENTINEL would realistically flag. Previously this was
+# hardcoded to always ("EPS", <missing>) regardless of which fault was
+# actually running — SHERLOCK's causal-graph diagnosis was told the wrong
+# subsystem for 5 of 6 faults. Subsystem names match graph.py's SUBSYSTEMS.
+FAULT_SUBSYSTEM_MAP = {
+    "tcs_thermal_runaway": ("TCS", "panel_temp"),
+    "ttc_signal_dropout": ("TT&C", "signal_strength"),
+    "propulsion_thruster_fault": ("Propulsion", "thruster_temp"),
+    "eps_battery_degradation": ("EPS", "battery_soc"),
+    "eps_cascade_power_failure": ("EPS", "bus_voltage"),
+    "adcs_reaction_wheel_degradation": ("ADCS", "reaction_wheel_speed"),
+}
 
 app = FastAPI(title="AERO-ASTRA Streaming Bridge")
 
@@ -171,12 +186,28 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
     sim = simulate_scenario(fault=fault_scenario, duration=600.0, dt=1.0, fault_onset=5.0, severity=severity)
     
     persistence = SentinelPersistenceFilter(threshold=0.60, min_consecutive_steps=35)
-    # KNOWN ISSUE [RESOLVED] — PhysicsSpikeFilter now implements a rolling event-count debounce
+    # KNOWN ISSUE, NOT resolved — measured directly (see roadmap.md §2): this
+    # debounce reduces the raw false-alarm count but post-fault detection is
+    # still statistically close to the nominal false-positive rate. Do not
+    # remove this comment until someone re-measures and it's actually fixed.
     physics_filter = PhysicsSpikeFilter(window_size=10, min_spikes_required=2)
     window = []
-    
-    sherlock_agent = SherlockAgent()
-    athena_agent = AthenaAgent()
+
+    # Lazy init with a graceful no-API-key fallback — lets the server start
+    # and stream real telemetry/SENTINEL/VITALS even without
+    # OPENROUTER_API_KEY set, instead of crashing the whole background task.
+    # SHERLOCK/ATHENA-dependent messages fall back to a clearly-labeled stub
+    # so the rest of the pipeline stays testable and demoable.
+    try:
+        sherlock_agent = SherlockAgent()
+    except EnvironmentError as key_err:
+        log.warning("SHERLOCK disabled (no API key): %s", key_err)
+        sherlock_agent = None
+    try:
+        athena_agent = AthenaAgent()
+    except EnvironmentError as key_err:
+        log.warning("ATHENA disabled (no API key): %s", key_err)
+        athena_agent = None
     incident_in_progress = False
     
     # Keep references to background tasks to prevent garbage collection
@@ -193,17 +224,33 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
         await manager.broadcast(oracle_msg)
 
         # ATHENA Planning (Non-blocking)
-        try:
-            athena_plan = await asyncio.to_thread(athena_agent.plan, diag, oracle_response)
-            athena_msg = {
+        if athena_agent is None:
+            await manager.broadcast({
                 "type": "athena_plan",
-                "recommended_action": athena_plan.recommended_action,
-                "rationale": athena_plan.overall_reasoning,
-                "estimated_recovery_time_minutes": 15
-            }
-            await manager.broadcast(athena_msg)
-        except Exception as e:
-            log.error(f"ATHENA failed: {e}")
+                "recommended_action": oracle_response.best_action,
+                "rationale": "ATHENA offline (no OPENROUTER_API_KEY set) — falling back to ORACLE's top-ranked action with no LLM reasoning.",
+                "estimated_recovery_time_minutes": None,
+                "offline_fallback": True,
+            })
+        else:
+            try:
+                athena_plan = await asyncio.to_thread(athena_agent.plan, diag, oracle_response)
+                athena_msg = {
+                    "type": "athena_plan",
+                    "recommended_action": athena_plan.recommended_action,
+                    "rationale": athena_plan.overall_reasoning,
+                    "estimated_recovery_time_minutes": 15
+                }
+                await manager.broadcast(athena_msg)
+            except Exception as e:
+                log.error(f"ATHENA failed: {e}")
+                await manager.broadcast({
+                    "type": "athena_plan",
+                    "recommended_action": oracle_response.best_action,
+                    "rationale": f"ATHENA call failed ({type(e).__name__}) — falling back to ORACLE's top-ranked action.",
+                    "estimated_recovery_time_minutes": None,
+                    "offline_fallback": True,
+                })
 
     for frame in sim.frames:
         await asyncio.sleep(1.0) # stream one simulation frame per second
@@ -243,9 +290,11 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
             alarm_spike, _ = physics_filter.update(df, static_mad_dict, mad_multiplier=4.0)
 
             is_anomaly = alarm_flatline or alarm_spike
-            
-            # Fallback for missing ML model: trigger anomaly if vitals drop significantly
-            if not is_anomaly and vitals_payload["system_health"] < 0.85:
+
+            # Fallback for missing ML model: trigger on the worst single
+            # subsystem, not the 3-way average (see vitals/agent.py — the
+            # average masks a fully-degraded single subsystem).
+            if not is_anomaly and vitals_payload["worst_health"] < 0.85:
                 is_anomaly = True
                 alarm_flatline = True # simulate detection
 
@@ -253,31 +302,72 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
             if is_anomaly and not incident_in_progress:
                 incident_in_progress = True
                 triggered_engine = "BOTH" if (alarm_flatline and alarm_spike) else ("Engine A (Telemetry)" if alarm_flatline else "Engine B (Physics)")
-                
+
                 sentinel_msg = {
                     "type": "sentinel_alert",
                     "is_anomaly": True,
                     "triggered_engine": triggered_engine,
                     "timestamp": frame.timestamp,
+                    "false_positive": fault_scenario is None,
                 }
                 await manager.broadcast(sentinel_msg)
-                
+
+                if fault_scenario is None:
+                    # No fault is actually injected — this is a genuine false
+                    # positive from one of the detection engines (Engine B's
+                    # spike filter is known-noisy, see roadmap.md §2). There's
+                    # nothing real to diagnose, and previously this crashed
+                    # ORACLE with KeyError('unknown') trying to look up a
+                    # fault name that doesn't exist in FAULT_CATALOG — caught
+                    # directly running the auto-started nominal stream at
+                    # server boot. Surface the alert (it's honest signal
+                    # about detector noise) but skip the rest of the pipeline.
+                    log.warning(
+                        "sentinel_alert fired with no fault injected (false "
+                        "positive from %s) — skipping diagnosis/oracle/athena",
+                        triggered_engine,
+                    )
+                    continue
+
                 # DIAGNOSIS (Non-blocking)
                 # Same fix as SimulatorTelemetryProvider above — frame.timestamp
                 # is sim-elapsed seconds, not a real epoch offset.
                 dt_ts = datetime.now(timezone.utc)
+                flagged_subsystem, flagged_parameter = FAULT_SUBSYSTEM_MAP.get(
+                    fault_scenario, ("EPS", "unknown")
+                )
                 anomaly_event = AnomalyEvent(
                     anomaly_id="EVT-001",
                     timestamp=dt_ts,
-                    flagged_subsystem="EPS",  # mock
+                    flagged_subsystem=flagged_subsystem,
+                    flagged_parameter=flagged_parameter,
+                    # Not a calibrated probability — this pipeline's detectors
+                    # (XGBoost flatline score, physics spike filter, VITALS
+                    # threshold fallback) don't produce one. 0.75 signals
+                    # "detected, moderately confident" without pretending to
+                    # more precision than the underlying detectors actually have.
+                    confidence_score=0.75,
                     severity=UrgencyLevel.HIGH,
                     telemetry_window=[]
                 )
                 
                 provider = SimulatorTelemetryProvider(frame.state)
-                # Run SHERLOCK in a separate thread to prevent blocking the event loop
-                diagnosis = await asyncio.to_thread(sherlock_agent.diagnose, anomaly_event, provider)
-                
+                if sherlock_agent is None:
+                    # No API key — stub diagnosis so the rest of the pipeline
+                    # (GUARDIAN/ORACLE/ATHENA, and the frontend consuming
+                    # this message) stays fully exercisable without an LLM.
+                    diagnosis = SimpleNamespace(
+                        primary_root_cause=fault_scenario or "unknown",
+                        causal_chain=[fault_scenario] if fault_scenario else [],
+                        confidence_score=0.0,
+                        urgency=UrgencyLevel.HIGH if severity >= 0.7 else UrgencyLevel.MEDIUM,
+                        time_to_critical_estimate_minutes=20,
+                        reasoning="SHERLOCK offline (no OPENROUTER_API_KEY set) — stub diagnosis for pipeline testing.",
+                    )
+                else:
+                    # Run SHERLOCK in a separate thread to prevent blocking the event loop
+                    diagnosis = await asyncio.to_thread(sherlock_agent.diagnose, anomaly_event, provider)
+
                 sherlock_msg = {
                     "type": "sherlock_diagnosis",
                     "primary_root_cause": diagnosis.primary_root_cause,

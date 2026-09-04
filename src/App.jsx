@@ -27,7 +27,7 @@ const AGENT_ROSTER = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Fault scenario catalog — faults verified to produce a real, visible
+//  Fault scenario catalog — the 3 faults verified to produce a real, visible
 //  signal within a demo-length simulator run (see audit_findings.md §3).
 //  `baseline` / `live` share keys so this doubles as the exact shape the
 //  WebSocket `telemetry` message will fill in once backend/api.py exists
@@ -35,26 +35,6 @@ const AGENT_ROSTER = [
 //  matter of replacing these objects with WS payloads, not restructuring UI.
 // ─────────────────────────────────────────────────────────────────────────────
 const FAULT_SCENARIOS = {
-  eps_battery_degradation: {
-    key: 'eps_battery_degradation',
-    faultId: 'eps_battery_degradation',
-    label: 'EPS Battery Degradation',
-    subsystem: 'EPS',
-    summary: 'Battery capacity and bus voltage decline gradually under load.',
-    rootCause: 'Battery Cell Degradation (EPS)',
-    causalChain: ['EPS', 'TCS', 'ADCS'],
-    liveOverride: { epsLoad: 'DEGRADING', cpuUsage: 'RISING' },
-  },
-  eps_cascade_power_failure: {
-    key: 'eps_cascade_power_failure',
-    faultId: 'eps_cascade_power_failure',
-    label: 'EPS Cascade Power Failure',
-    subsystem: 'EPS',
-    summary: 'Solar array loss drains the battery and starves downstream systems.',
-    rootCause: 'Solar Array Power Loss (EPS)',
-    causalChain: ['EPS', 'TCS', 'ADCS'],
-    liveOverride: { epsLoad: 'CRITICAL', cpuUsage: 'SHUTDOWN' },
-  },
   thermal_runaway: {
     key: 'thermal_runaway',
     faultId: 'tcs_thermal_runaway',
@@ -107,6 +87,21 @@ const TELEMETRY_ROWS = [
 // requires a human approval click (MANUAL_INTERLOCK). See roadmap.md's MVP
 // section — this is the branch that produces the demo's two real outcomes.
 const HIGH_RISK_SEVERITY_THRESHOLD = 0.7;
+
+// Right-sidebar mission timeline — replaces the old per-agent detail panels
+// (VITALS/SHERLOCK/ATHENA), which now live exclusively behind the AgentNav
+// console so they're not duplicated in two places. minPhaseIdx into
+// PHASE_ORDER decides when each stage lights up; ORACLE and ATHENA share an
+// index since both are conceptually active during 'planning'.
+const PHASE_ORDER = ['detected', 'diagnosing', 'planning', 'awaiting_approval', 'executing', 'resolved'];
+const MISSION_STAGES = [
+  { code: 'SENTINEL', minPhaseIdx: 0 },
+  { code: 'SHERLOCK', minPhaseIdx: 1 },
+  { code: 'ORACLE', minPhaseIdx: 2 },
+  { code: 'ATHENA', minPhaseIdx: 2 },
+  { code: 'GUARDIAN', minPhaseIdx: 3 },
+  { code: 'SCRIBE', minPhaseIdx: 4 },
+];
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Web Audio Beep
@@ -258,53 +253,34 @@ function App() {
 
   // Scenario picker + comparison panel state
   const [showScenarioPicker, setShowScenarioPicker] = useState(false);
-  const [pendingScenario, setPendingScenario] = useState('eps_battery_degradation');
+  const [pendingScenario, setPendingScenario] = useState('thermal_runaway');
   const [pendingSeverity, setPendingSeverity] = useState(0.7);
   const [activeScenario, setActiveScenario] = useState(null);
   const [activeSeverity, setActiveSeverity] = useState(null);
   const [guardianTier, setGuardianTier] = useState(null); // 'AUTOMATED_GUARDED' | 'MANUAL_INTERLOCK'
   const [showDiff, setShowDiff] = useState(false);
-  const [liveTelemetry, setLiveTelemetry] = useState(BASELINE_TELEMETRY);
-  const [vitals, setVitals] = useState({ eps_health: 1.0, tcs_health: 1.0, adcs_health: 1.0, system_health: 1.0 });
 
-  useEffect(() => {
-    const ws = new WebSocket("ws://localhost:8000/ws");
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.type === 'telemetry') {
-         setLiveTelemetry(prev => ({
-           ...prev,
-           epsLoad: `${data.subsystems.EPS.battery_soc.toFixed(1)}%`,
-           cpuUsage: `${Math.max(0, (28.1 - data.subsystems.EPS.bus_voltage) * 10).toFixed(1)}%`,
-           tcsTemp: `${data.subsystems.ADCS.reaction_wheel_speed.toFixed(0)} RPM`,
-           altitude: '540 km | 7.5 km/s',
-           commLink: 'Stable',
-         }));
-      } else if (data.type === 'sentinel_alert') {
-         setScenarioPhase('detected');
-         setLogs(prev => [...prev, `> ⚠ WARN: Anomaly detected by ${data.triggered_engine}.`, `> SENTINEL: Correlation threshold exceeded.`]);
-      } else if (data.type === 'sherlock_diagnosis') {
-         setScenarioPhase('diagnosing');
-         setLogs(prev => [...prev, `> SHERLOCK: Building causal dependency graph...`, `> SHERLOCK: Root cause isolated → ${data.primary_root_cause}.`]);
-         setActiveScenario(prev => prev ? { ...prev, rootCause: data.primary_root_cause, causalChain: data.causal_chain || [data.primary_root_cause] } : null);
-         setTimeout(() => setScenarioPhase('planning'), 2000);
-      } else if (data.type === 'oracle_simulation') {
-         setLogs(prev => [...prev, `> ORACLE: Simulated mitigation options. Best action: ${data.best_action} (Safety: ${data.top_score.toFixed(2)})`]);
-      } else if (data.type === 'vitals_update') {
-         setVitals(data.payload);
-      } else if (data.type === 'guardian_action') {
-         setScenarioPhase('awaiting_approval');
-         setGuardianTier(data.status);
-         if (data.status === 'AUTOMATED_GUARDED' || data.status === 'AUTONOMOUS_SAFED') {
-             setGuardianApproved(true);
-             setLogs(prev => [...prev, `> GUARDIAN: ${data.status}. Executing without human approval.`]);
-         } else {
-             setLogs(prev => [...prev, '> GUARDIAN: HIGH severity → MANUAL_INTERLOCK. Safety gate locked, awaiting human approval.']);
-         }
-      }
-    };
-    return () => ws.close();
-  }, []);
+  // ── Real backend WebSocket state ──
+  // wsRef keeps one persistent connection open while the dashboard is visible.
+  // backendData holds the latest messages from each agent as they arrive.
+  const wsRef = useRef(null);
+  // executeRunbook() is called from inside the WebSocket onmessage closure
+  // (AUTOMATED_GUARDED / AUTONOMOUS_SAFED auto-execute paths), which is
+  // created once when the dashboard mounts and would otherwise always see
+  // activeScenario as it was at that moment (null) — a stale closure. This
+  // ref is kept in sync on every launch/reset so the WS-driven auto-execute
+  // path always reads the real current scenario.
+  const activeScenarioRef = useRef(null);
+  const [backendOnline, setBackendOnline] = useState(false);
+  const [backendData, setBackendData] = useState({
+    sentinel: null,    // { triggered_engine, timestamp }
+    sherlock: null,    // { primary_root_cause, causal_chain, urgency, confidence_score, time_to_critical }
+    oracle: null,      // { best_action, top_score, mode }
+    athena: null,      // { recommended_action, rationale }
+    guardian: null,    // { status, action_taken }
+    telemetry: null,   // { subsystems: { ADCS, EPS } }
+    vitals: null,      // { worst_health, ... }
+  });
 
   const loadMessages = [
     '> BOOT: AERO-ASTRA MISSION CONTROL v2.5',
@@ -316,19 +292,124 @@ function App() {
     '> SCRIBE: Audit trail ready. All agents online.',
   ];
 
-  // ── Launch sequence (exactly like orbital-tomb) ──
+  // ── WebSocket connection: open when dashboard is shown, close when not ──
+  useEffect(() => {
+    if (!showDashboard) return;
+
+    const WS_URL = 'ws://localhost:8000/ws';
+    let ws;
+    let reconnectTimer;
+
+    const connect = () => {
+      ws = new WebSocket(WS_URL);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        setBackendOnline(true);
+        setLogs(prev => [...prev, '> BACKEND: WebSocket connected — real telemetry streaming.']);
+      };
+
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          switch (msg.type) {
+            case 'telemetry':
+              setBackendData(prev => ({ ...prev, telemetry: msg }));
+              break;
+            case 'vitals_update':
+              setBackendData(prev => ({ ...prev, vitals: msg.payload }));
+              break;
+            case 'sentinel_alert':
+              setBackendData(prev => ({ ...prev, sentinel: msg }));
+              setScenarioPhase(p => p === 'nominal' ? 'detected' : p);
+              setLogs(prev => [...prev,
+                `> ⚠ SENTINEL: Anomaly detected via ${msg.triggered_engine}`,
+              ]);
+              break;
+            case 'sherlock_diagnosis':
+              setBackendData(prev => ({ ...prev, sherlock: msg }));
+              setScenarioPhase(p => (p === 'detected' || p === 'nominal') ? 'diagnosing' : p);
+              setLogs(prev => [...prev,
+                `> SHERLOCK: Root cause → ${msg.primary_root_cause}`,
+                `> SHERLOCK: Urgency ${msg.urgency}, TTC ${msg.time_to_critical}min`,
+              ]);
+              break;
+            case 'oracle_simulation':
+              setBackendData(prev => ({ ...prev, oracle: msg }));
+              setScenarioPhase(p => (p === 'diagnosing' || p === 'detected') ? 'planning' : p);
+              setLogs(prev => [...prev,
+                `> ORACLE: Best action → ${msg.best_action} (score ${msg.top_score?.toFixed(2)})`,
+              ]);
+              break;
+            case 'athena_plan':
+              setBackendData(prev => ({ ...prev, athena: msg }));
+              setLogs(prev => [...prev,
+                `> ATHENA: Plan → ${msg.recommended_action}`,
+              ]);
+              break;
+            case 'guardian_action':
+              setBackendData(prev => ({ ...prev, guardian: msg }));
+              setGuardianTier(msg.status);
+              if (msg.status === 'AUTOMATED_GUARDED') {
+                setGuardianApproved(true);
+                setScenarioPhase('awaiting_approval');
+                setLogs(prev => [...prev, '> GUARDIAN: AUTOMATED_GUARDED — executing recovery.']);
+                setTimeout(() => executeRunbook(activeScenarioRef.current), 900);
+              } else if (msg.status === 'MANUAL_INTERLOCK') {
+                setScenarioPhase('awaiting_approval');
+                setLogs(prev => [...prev, '> GUARDIAN: MANUAL_INTERLOCK — awaiting human approval.']);
+              } else if (msg.status === 'AUTONOMOUS_SAFED') {
+                setGuardianApproved(true);
+                setScenarioPhase('awaiting_approval');
+                setLogs(prev => [...prev, '> GUARDIAN: AUTONOMOUS_SAFED — critical threshold crossed, acting immediately.']);
+                setTimeout(() => executeRunbook(activeScenarioRef.current), 300);
+              }
+              break;
+            default:
+              break;
+          }
+        } catch (_) {}
+      };
+
+      ws.onclose = () => {
+        setBackendOnline(false);
+        // Auto-reconnect after 3s
+        reconnectTimer = setTimeout(connect, 3000);
+      };
+
+      ws.onerror = () => {
+        setBackendOnline(false);
+        ws.close();
+      };
+    };
+
+    connect();
+    return () => {
+      clearTimeout(reconnectTimer);
+      if (wsRef.current) wsRef.current.close();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showDashboard]);
+
+  // ── Launch sequence ──
+  // 1. Set launched=true → Scene3D camera starts dollying in
+  // 2. After 800ms show the loader panel
+  // 3. After 3000ms total → show dashboard
   const handleLaunch = () => {
     playBeep();
     setLaunched(true);
 
+    // After camera starts moving, show loading overlay
     setTimeout(() => {
       setShowLoader(true);
       setLoadStep(0);
+      // Stagger load messages
       loadMessages.forEach((_, i) => {
         setTimeout(() => setLoadStep(i + 1), i * 260);
       });
     }, 800);
 
+    // Transition to dashboard
     setTimeout(() => {
       setShowDashboard(true);
       setMissionStart(Date.now());
@@ -341,17 +422,11 @@ function App() {
     setGuardianApproved(false);
     setSelectedMitigation(1);
     setActiveScenario(null);
+    activeScenarioRef.current = null;
     setActiveSeverity(null);
     setGuardianTier(null);
     setShowDiff(false);
-    setVitals({ eps_health: 1.0, tcs_health: 1.0, adcs_health: 1.0, system_health: 1.0 });
     setLogs(['> System reset.', '> Telemetry linked on band S7.', '> SENTINEL: Monitoring 5 active assets.']);
-    
-    fetch('http://localhost:8000/trigger', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fault_name: 'nominal', severity: 0.0 })
-    }).catch(err => setLogs(prev => [...prev, `> ERROR: Backend unreachable: ${err.message}`]));
   };
 
   const openScenarioPicker = () => {
@@ -362,22 +437,68 @@ function App() {
     setShowScenarioPicker(true);
   };
 
+  // Launches the chosen scenario — calls real backend POST /trigger,
+  // then state is driven by incoming WebSocket messages above.
+  // The mock liveOverride still fills in for telemetry fields not yet streamed.
   const launchScenario = () => {
     const scenario = FAULT_SCENARIOS[pendingScenario];
     const severity = pendingSeverity;
 
     setShowScenarioPicker(false);
     setActiveScenario(scenario);
+    activeScenarioRef.current = scenario;
     setActiveSeverity(severity);
     setShowDiff(false);
-    setScenarioPhase('nominal'); // Will be updated by WS
-    setLogs(prev => [...prev, `> SYSTEM: Injecting fault ${scenario.faultId} at severity ${severity.toFixed(2)}...`]);
+    // Reset any previous backend data from the last run
+    setBackendData({ sentinel: null, sherlock: null, oracle: null, athena: null, guardian: null, telemetry: null, vitals: null });
+    setScenarioPhase('nominal');
+    setGuardianTier(null);
+    setGuardianApproved(false);
 
+    // Call real backend — kicks off the physics simulation + full agent pipeline.
+    // Falls back silently if backend is offline (keeps the UI usable in demo mode).
     fetch('http://localhost:8000/trigger', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fault_name: scenario.faultId, severity: severity })
-    }).catch(err => setLogs(prev => [...prev, `> ERROR: Backend unreachable: ${err.message}`]));
+      body: JSON.stringify({ fault_name: scenario.faultId, severity }),
+    }).then(r => r.json()).then(data => {
+      setLogs(prev => [...prev,
+        `> BACKEND: Scenario "${scenario.label}" injected (severity ${severity.toFixed(2)}).`,
+        '> SENTINEL: Starting physics simulation + anomaly scoring...',
+      ]);
+    }).catch(() => {
+      // Backend offline — fall back to the original mock timer cascade
+      setLogs(prev => [...prev,
+        '> ⚠ BACKEND OFFLINE: Running in mock mode (no real pipeline).',
+        `> ⚠ WARN: Anomaly detected at ${scenario.subsystem}.`,
+      ]);
+      setScenarioPhase('detected');
+      setTimeout(() => {
+        setScenarioPhase('diagnosing');
+        setLogs(prev => [...prev,
+          '> SHERLOCK: Building causal dependency graph...',
+          `> SHERLOCK: Root cause isolated → ${scenario.causalChain.join(' → ')}.`,
+        ]);
+        setTimeout(() => {
+          setScenarioPhase('planning');
+          setLogs(prev => [...prev, '> ATHENA: Generating recovery options.']);
+          setTimeout(() => {
+            const isHighRisk = severity >= HIGH_RISK_SEVERITY_THRESHOLD;
+            if (isHighRisk) {
+              setGuardianTier('MANUAL_INTERLOCK');
+              setScenarioPhase('awaiting_approval');
+              setLogs(prev => [...prev, '> GUARDIAN: HIGH severity → MANUAL_INTERLOCK.']);
+            } else {
+              setGuardianTier('AUTOMATED_GUARDED');
+              setGuardianApproved(true);
+              setScenarioPhase('awaiting_approval');
+              setLogs(prev => [...prev, '> GUARDIAN: AUTOMATED_GUARDED — executing.']);
+              setTimeout(() => executeRunbook(scenario), 900);
+            }
+          }, 3000);
+        }, 3000);
+      }, 3000);
+    });
   };
 
   const handleApprove = (e) => {
@@ -387,8 +508,14 @@ function App() {
   };
 
   const executeRunbook = (scenarioOverride) => {
-    const scenario = scenarioOverride || activeScenario;
-    if (!scenario) return;
+    // Fall back to a generic placeholder rather than crashing — this can be
+    // reached from the WebSocket auto-execute path where no local scenario
+    // was ever set locally (e.g. backend fires a real alert independent of
+    // the frontend's own picker flow).
+    const scenario = scenarioOverride || activeScenario || {
+      label: 'Detected Anomaly', faultId: 'unknown', subsystem: 'affected subsystem',
+      rootCause: 'unknown', causalChain: ['unknown'],
+    };
     setScenarioPhase('executing');
     setLogs(prev => [...prev,
     `> SCRIBE: Executing Option ${selectedMitigation}.`,
@@ -409,6 +536,11 @@ function App() {
   };
 
   const isAnomaly = scenarioPhase !== 'nominal' && scenarioPhase !== 'resolved';
+
+  // Live telemetry = baseline with the active scenario's field-level
+  // overrides applied. Same shape a real `telemetry` WS message would have
+  // (see backend.md §5) — this is the mock stand-in for that payload.
+  const liveTelemetry = { ...BASELINE_TELEMETRY, ...(isAnomaly ? activeScenario?.liveOverride : null) };
 
   return (
     <div style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden' }}>
@@ -490,35 +622,39 @@ function App() {
             <PillNav
               activeId={activeView}
               items={[
-                { id: 'dashboard', label: 'Dashboard', onClick: () => setActiveView('dashboard') },
+                { id: 'dashboard', label: 'Dashboard', onClick: () => { setActiveView('dashboard'); setActiveAgentPage(null); } },
                 { id: 'about', label: 'About', onClick: () => setActiveView('about') },
               ]}
             />
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: '8px', letterSpacing: '0.15em', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', fontWeight: 'bold' }}>UTC TIME</div>
-                <div style={{ fontFamily: 'monospace', fontSize: '13px', fontWeight: 'bold', color: '#EDEEF2', letterSpacing: '0.1em' }}><LiveClock /></div>
-              </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: '8px', letterSpacing: '0.15em', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', fontWeight: 'bold' }}>UTC TIME</div>
+              <div style={{ fontFamily: 'monospace', fontSize: '13px', fontWeight: 'bold', color: '#EDEEF2', letterSpacing: '0.1em' }}><LiveClock /></div>
             </div>
           </div>
+        </div>
 
           {/* Row 2 — breadcrumb + MET */}
-          <div style={{
-            height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            padding: '0 32px', background: 'rgba(0,0,0,0.2)',
-          }}>
-            <div style={{ fontSize: '9px', fontFamily: 'monospace', letterSpacing: '0.1em', color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase' }}>
-              MISSION CONTROL / {activeView === 'about' ? 'ABOUT' : 'DASHBOARD'} / <span style={{ color: '#EDEEF2', fontWeight: 'bold' }}>{activeView === 'about' ? 'AGENT ARCHITECTURE' : 'ANOMALY RESPONSE'}</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: '#00FF88', fontFamily: 'monospace', fontWeight: 'bold' }}>
-              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#00FF88', display: 'inline-block', animation: 'blink-dots 1.5s infinite' }} />
-              {missionStart && <MetTimer start={missionStart} />}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '9px', color: 'rgba(255,255,255,0.5)', fontFamily: 'monospace' }}>
-              SIGNAL: <span style={{ color: '#00FF88', fontWeight: 'bold' }}>LINK_NOMINAL</span>
-            </div>
-          </div>
+      <div style={{
+        height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '0 32px', background: 'rgba(0,0,0,0.2)',
+      }}>
+        <div style={{ fontSize: '9px', fontFamily: 'monospace', letterSpacing: '0.1em', color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase' }}>
+          MISSION CONTROL / {activeView === 'about' ? 'ABOUT' : 'DASHBOARD'} / <span style={{ color: '#EDEEF2', fontWeight: 'bold' }}>{activeView === 'about' ? 'AGENT ARCHITECTURE' : 'ANOMALY RESPONSE'}</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: '#00FF88', fontFamily: 'monospace', fontWeight: 'bold' }}>
+          <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#00FF88', display: 'inline-block', animation: 'blink-dots 1.5s infinite' }} />
+          {missionStart && <MetTimer start={missionStart} />}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '9px', color: 'rgba(255,255,255,0.5)', fontFamily: 'monospace' }}>
+          SIGNAL: <span style={{ color: '#00FF88', fontWeight: 'bold' }}>LINK_NOMINAL</span>
+          &nbsp;|&nbsp;
+          BACKEND: <span style={{ color: backendOnline ? '#00FF88' : '#ff4444', fontWeight: 'bold' }}>
+            {backendOnline ? '● LIVE' : '○ OFFLINE'}
+          </span>
+        </div>
+      </div>
     </header>
   ) : (
     /* Landing / Loader header — exactly matching orbital-tomb */
@@ -825,6 +961,8 @@ function App() {
             liveTelemetry={liveTelemetry}
             BASELINE_TELEMETRY={BASELINE_TELEMETRY}
             TELEMETRY_ROWS={TELEMETRY_ROWS}
+            backendOnline={backendOnline}
+            backendData={backendData}
           />
         ) : (
         <>
@@ -908,62 +1046,34 @@ function App() {
         {/* ── RIGHT SIDEBAR ── */}
         <div className="sidebar right-panel">
           <div className="panel">
-            <div className="panel-title">AGENT: VITALS (PROACTIVE)</div>
-            <div className="data-row"><span>System Health</span><span className={vitals.system_health < 0.8 ? 'text-red' : 'text-green'}>{(vitals.system_health * 100).toFixed(1)}%</span></div>
-            {[['EPS', vitals.eps_health], ['TCS', vitals.tcs_health], ['ADCS', vitals.adcs_health]].map(([label, score]) => (
-              <div className="vitals-bar-row" key={label}>
-                <div className="data-row"><span>{label} Health</span><span>{(score * 100).toFixed(1)}%</span></div>
-                <div className="vitals-bar-track" role="progressbar" aria-label={`${label} health`} aria-valuenow={score * 100} aria-valuemin="0" aria-valuemax="100">
-                  <div className={`vitals-bar-fill vitals-bar-fill--${label.toLowerCase()}`} style={{ width: `${score * 100}%` }} />
-                </div>
-              </div>
-            ))}
-            {vitals.system_health < 0.6 && (
-              <div style={{ color: '#ff3b3b', fontSize: '11px', marginTop: '8px', border: '1px dashed #ff3b3b', padding: '6px' }}>
-                ⚠ WARNING: CRITICAL DEGRADATION DETECTED
-              </div>
-            )}
+            <div className="panel-title">MISSION TIMELINE</div>
+            <div className="mission-timeline">
+              {MISSION_STAGES.map(stage => {
+                const phaseIdx = PHASE_ORDER.indexOf(scenarioPhase);
+                const state = scenarioPhase === 'nominal' ? 'idle'
+                  : scenarioPhase === 'resolved' ? 'done'
+                  : phaseIdx > stage.minPhaseIdx ? 'done'
+                  : phaseIdx === stage.minPhaseIdx ? 'active'
+                  : 'pending';
+                return (
+                  <div key={stage.code} className={`timeline-stage timeline-stage--${state}`}>
+                    <span className="timeline-dot" />
+                    <span className="timeline-label">{stage.code}</span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
           <div className="panel flex-1">
-            <div className="panel-title">AGENT: SHERLOCK (DIAGNOSIS)</div>
-            {(scenarioPhase === 'diagnosing' || scenarioPhase === 'planning' || scenarioPhase === 'awaiting_approval' || scenarioPhase === 'executing') ? (
-              <div className="causal-graph-placeholder" style={{ flexDirection: 'column', padding: '10px', alignItems: 'flex-start', justifyContent: 'center', gap: '4px' }}>
-                <div style={{ color: '#ff3b3b', fontWeight: 'bold', marginBottom: '4px' }}>ROOT CAUSE IDENTIFIED:</div>
-                <div className="text-cyan" style={{ fontSize: '12px' }}>[{activeScenario?.rootCause}]</div>
-                {activeScenario?.causalChain.slice(1).map((node, i) => (
-                  <React.Fragment key={node}>
-                    <div style={{ margin: '2px 0', color: '#888' }}>↓ causing ↓</div>
-                    <div className="text-cyan" style={{ fontSize: '12px' }}>[{node}]</div>
-                  </React.Fragment>
-                ))}
-              </div>
-            ) : (
-              <div className="causal-graph-placeholder text-muted">
-                {scenarioPhase === 'detected' ? <span className="dot-blink">Analyzing telemetry data...</span> : 'Awaiting fault trigger...'}
-              </div>
-            )}
-          </div>
-
-          <div className="panel">
-            <div className="panel-title">AGENT: ATHENA (MITIGATION)</div>
-            {(scenarioPhase === 'planning' || scenarioPhase === 'awaiting_approval' || scenarioPhase === 'executing') ? (
-              <div>
-                <div style={{ fontSize: '11px', marginBottom: '8px', color: '#888' }}>Recommended Recovery Options:</div>
-                <div onClick={() => scenarioPhase !== 'executing' && setSelectedMitigation(1)}
-                  style={{ border: selectedMitigation === 1 ? '1px solid #EDEEF2' : '1px solid rgba(230, 232, 236, 0.45)', padding: '8px', fontSize: '11px', marginBottom: '5px', background: selectedMitigation === 1 ? 'rgba(230,232,236,0.15)' : 'rgba(230,232,236,0.06)', cursor: 'pointer' }}>
-                  1. Throttle {activeScenario?.subsystem} to Safe Limits (Safe: 98%)
-                </div>
-                <div onClick={() => scenarioPhase !== 'executing' && setSelectedMitigation(2)}
-                  style={{ border: selectedMitigation === 2 ? '1px solid #EDEEF2' : '1px solid #333', padding: '8px', fontSize: '11px', color: selectedMitigation === 2 ? '#fff' : '#777', background: selectedMitigation === 2 ? 'rgba(230,232,236,0.15)' : 'transparent', cursor: 'pointer' }}>
-                  2. Emergency Shutoff (Loss risk: 15%)
-                </div>
-              </div>
-            ) : (
-              <div className="text-muted" style={{ fontSize: '11px' }}>
-                {scenarioPhase === 'diagnosing' ? <span className="dot-blink">Waiting for Sherlock diagnosis...</span> : 'No mitigation required.'}
-              </div>
-            )}
+            <div className="panel-title">GROUND CONTACT</div>
+            <div className="data-row"><span>Next AOS</span><span className="text-cyan">{missionStart ? `T-${Math.max(0, 8 - Math.floor(((Date.now() - missionStart) / 1000) % 480 / 60))} min` : 'T-8 min'}</span></div>
+            <div className="data-row"><span>Station</span><span>SVALBARD (SG3)</span></div>
+            <div className="data-row"><span>Orbit</span><span className="text-cyan">#{missionStart ? 4127 + Math.floor((Date.now() - missionStart) / 5400000) : 4127}</span></div>
+            <div className="data-row"><span>Alt / Vel</span><span>540 km | 7.5 km/s</span></div>
+            <div className="text-muted" style={{ fontSize: '9px', marginTop: '8px', lineHeight: 1.5 }}>
+              Simulated pass schedule — QUARTERMASTER will replace this with real fleet coordination once built.
+            </div>
           </div>
 
           <div className="panel" style={{ gap: '10px', display: 'flex', flexDirection: 'column' }}>
