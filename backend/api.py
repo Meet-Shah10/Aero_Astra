@@ -8,7 +8,13 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# Search for .env in: (1) current working directory, (2) this file's directory,
+# (3) project root — whichever is found first wins.
+_HERE = Path(__file__).resolve().parent          # backend/
+_ROOT = _HERE.parent                              # project root
+load_dotenv(_HERE / ".env")    # backend/.env  (preferred when running from backend/)
+load_dotenv(_ROOT / ".env")    # root .env     (fallback)
+load_dotenv()                  # cwd fallback  (catches any other launch paths)
 from typing import Any
 
 import numpy as np

@@ -62,6 +62,7 @@ from .prompts import (
     build_schema_validation_reprompt,
     build_user_prompt,
 )
+from .rag.pipeline import get_pipeline as _get_rag_pipeline
 from .schemas import (
     AthenaError,
     MissionConstraints,
@@ -77,17 +78,19 @@ log = logging.getLogger(__name__)
 # Configuration
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Same model and base URL as SHERLOCK — consistent OpenRouter setup
-DEFAULT_MODEL       = "anthropic/claude-sonnet-4-5"
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+# Google AI Studio (Gemini) — OpenAI-compatible endpoint
+# Env var: GEMINI_API_KEY  (falls back to OPENROUTER_API_KEY for backwards compat)
+DEFAULT_MODEL       = "models/gemini-2.5-flash"       # fast, capable, generous free tier
+DEFAULT_TEMPERATURE = 0.15
+DEFAULT_MAX_RETRIES = 3
+GEMINI_BASE_URL     = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
 # 0.15: slightly above SHERLOCK's 0.1 — procedure prose benefits from natural
 # variation, but this is still safety-relevant; must stay below 0.2.
 DEFAULT_TEMPERATURE = 0.15
 
 # Longer than SHERLOCK: 3 options × ~5 steps + reasoning_cot + narratives
-DEFAULT_MAX_TOKENS  = 2048
-
+DEFAULT_MAX_TOKENS  = 4096              # enough for full RecoveryPlan JSON
 DEFAULT_MAX_RETRIES = 3
 
 # Valid operator effort strings (for schema validation)
@@ -119,24 +122,50 @@ class AthenaAgent:
         temperature: float = DEFAULT_TEMPERATURE,
         max_retries: int = DEFAULT_MAX_RETRIES,
     ) -> None:
-        resolved_key = api_key or os.environ.get("OPENROUTER_API_KEY")
+        # GEMINI_API_KEY preferred; fall back to OPENROUTER_API_KEY for compat
+        resolved_key = (
+            api_key
+            or os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("OPENROUTER_API_KEY")
+        )
         if not resolved_key:
             raise EnvironmentError(
-                "OpenRouter API key not found. Set the OPENROUTER_API_KEY environment "
-                "variable or pass api_key= to AthenaAgent()."
+                "API key not found. Set GEMINI_API_KEY (Google AI Studio) "
+                "or OPENROUTER_API_KEY in environment, or pass api_key= to AthenaAgent()."
             )
 
         self._client = OpenAI(
-            base_url=OPENROUTER_BASE_URL,
+            base_url=GEMINI_BASE_URL,
             api_key=resolved_key,
         )
         self._model       = model
         self._temperature = temperature
         self._max_retries = max_retries
 
+        # ── RAG pipeline (warm singleton, non-blocking) ────────────────────
+        # Initialise the shared pipeline instance and ensure the vectorstore is
+        # ready. If the vectorstore is empty, ensure_ready() auto-seeds from the
+        # synthetic FDIR knowledge base. The entire init is wrapped so a missing
+        # API key or vectorstore never prevents ATHENA from starting.
+        try:
+            self._rag = _get_rag_pipeline()
+            if not self._rag.ensure_ready(auto_seed=True):
+                log.warning(
+                    "RAG vectorstore unavailable — ATHENA will plan without handbook context."
+                )
+                self._rag = None
+            else:
+                log.info(
+                    "RAG pipeline ready | docs=%d",
+                    self._rag._collection.count() if self._rag._collection else 0,
+                )
+        except Exception as exc:
+            log.warning("RAG initialisation failed (%s) — continuing without RAG.", exc)
+            self._rag = None
+
         log.info(
-            "AthenaAgent initialised | model=%s | temp=%.2f | max_retries=%d | via OpenRouter",
-            model, temperature, max_retries,
+            "AthenaAgent initialised | model=%s | temp=%.2f | max_retries=%d | rag=%s | via OpenRouter",
+            model, temperature, max_retries, "enabled" if self._rag else "disabled",
         )
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -177,8 +206,32 @@ class AthenaAgent:
         }
         valid_action_names: set[str] = set(oracle_lookup.keys())
 
-        # Build initial user prompt
-        user_prompt = build_user_prompt(sherlock_diagnosis, oracle_response, constraints)
+        # ── RAG retrieval: query vectorstore with fault context ───────────────
+        # Build a natural-language query from SHERLOCK's diagnosis fields so
+        # the embedding search targets the most relevant FDIR handbook passages.
+        fdir_context: str = ""
+        if self._rag is not None:
+            try:
+                rag_query = " ".join(filter(None, [
+                    sherlock_diagnosis.primary_root_cause,
+                    " ".join(sherlock_diagnosis.affected_subsystems),
+                    " ".join(sherlock_diagnosis.causal_chain),
+                    sherlock_diagnosis.urgency.value,
+                ]))
+                fdir_context = self._rag.retrieve(rag_query)
+                log.info(
+                    "RAG retrieved %d chars of FDIR context | query=%r",
+                    len(fdir_context),
+                    rag_query[:80],
+                )
+            except Exception as exc:
+                log.warning("RAG retrieval failed (%s) — proceeding without context.", exc)
+                fdir_context = ""
+
+        # Build initial user prompt (includes RAG context when available)
+        user_prompt = build_user_prompt(
+            sherlock_diagnosis, oracle_response, constraints, fdir_context=fdir_context
+        )
 
         # ── Phase 1+2+3: LLM call → Validate → Retry loop ─────────────────────
         plan_timestamp = datetime.now(timezone.utc)
@@ -310,11 +363,19 @@ class AthenaAgent:
         ]
         response = self._client.chat.completions.create(
             model=self._model,
-            max_tokens=DEFAULT_MAX_TOKENS,
+            max_completion_tokens=DEFAULT_MAX_TOKENS,
             temperature=self._temperature,
             messages=full_messages,
         )
-        raw = response.choices[0].message.content.strip()
+        raw = response.choices[0].message.content or ""
+        raw = raw.strip()
+        # Strip markdown code fences that Gemini often wraps JSON in
+        if raw.startswith("```"):
+            # Remove opening fence (```json or ```) and closing fence (```)
+            raw = raw.split("\n", 1)[-1]         # drop first line (```json)
+            if raw.endswith("```"):
+                raw = raw[: raw.rfind("```")]    # drop closing ```
+            raw = raw.strip()
         log.debug("ATHENA LLM raw response: %s", raw[:400])
         return raw
 
