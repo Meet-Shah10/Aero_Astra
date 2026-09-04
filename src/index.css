@@ -551,6 +551,7 @@ input:disabled + .slider { cursor: not-allowed; opacity: 0.5; }
   animation: emergency-flash 1.5s infinite;
 }
 
+
 /* EKG animations */
 .ekg-normal   { animation: ekgScrollNormal  4.5s linear infinite; }
 .ekg-erratic  { animation: ekgScrollErratic 1.2s linear infinite; }

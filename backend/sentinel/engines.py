@@ -185,9 +185,71 @@ class PhysicsSpikeFilter:
         return alarm, method if alarm else None
 
 # -----------------------------------------------------------------------------
-# ENGINE C: Correlation Shift Detector (DORMANT)
+# ENGINE C: Residual Correlation Detector
 # -----------------------------------------------------------------------------
-# Dormant per user request
+# Catches the failure class Engines A/B structurally can't: two coupled
+# channels drifting together away from their own short-horizon forecast,
+# neither one crossing an absolute threshold fast enough alone to trip a
+# single-channel alarm. Modeled on JAXA's Hitomi/ASTRO-H (2016) loss —
+# IRU vs. star-tracker disagreement drove commanded wheel torque against a
+# rotation that wasn't happening, so wheel speed and attitude error moved
+# together instead of the wheel's effort actually correcting the error.
+#
+# Each channel gets a one-step-ahead EWMA forecast; residual = actual -
+# forecast. When both residuals exceed a z-score threshold in the same
+# direction for several consecutive frames, that's a correlated break, not
+# independent per-channel noise.
+class ResidualCorrelationDetector:
+    def __init__(self, window=15, ewma_alpha=0.3, z_threshold=2.0, min_consecutive=5):
+        self.window = window
+        self.alpha = ewma_alpha
+        self.z_threshold = z_threshold
+        self.min_consecutive = min_consecutive
+        self._err_pred = None
+        self._wheel_pred = None
+        self._err_resid_hist = deque(maxlen=window)
+        self._wheel_resid_hist = deque(maxlen=window)
+        self._consecutive = 0
+
+    def update(self, attitude_error: float, wheel_speed: float):
+        """
+        Returns (alarm, err_actual, err_predicted, wheel_actual, wheel_predicted).
+        Predicted values are the EWMA forecast made *before* seeing this
+        sample — i.e. what Engine C expected this frame to look like.
+        """
+        if self._err_pred is None:
+            self._err_pred = attitude_error
+            self._wheel_pred = wheel_speed
+
+        err_pred = self._err_pred
+        wheel_pred = self._wheel_pred
+
+        err_residual = attitude_error - err_pred
+        wheel_residual = wheel_speed - wheel_pred
+
+        self._err_resid_hist.append(err_residual)
+        self._wheel_resid_hist.append(wheel_residual)
+
+        # Update forecasts for the *next* frame.
+        self._err_pred = self.alpha * attitude_error + (1 - self.alpha) * err_pred
+        self._wheel_pred = self.alpha * wheel_speed + (1 - self.alpha) * wheel_pred
+
+        alarm = False
+        if len(self._err_resid_hist) == self.window:
+            err_std = max(float(np.std(self._err_resid_hist)), 1e-6)
+            wheel_std = max(float(np.std(self._wheel_resid_hist)), 1e-6)
+            err_z = err_residual / err_std
+            wheel_z = wheel_residual / wheel_std
+
+            # Wheel speed is expected to trend down under normal control
+            # effort, so a rising attitude error alongside an unusually
+            # sharp wheel-speed *drop* (either sign break beyond its own
+            # recent noise band) is the correlated-divergence signature.
+            correlated_break = err_z > self.z_threshold and abs(wheel_z) > self.z_threshold
+            self._consecutive = self._consecutive + 1 if correlated_break else 0
+            alarm = self._consecutive >= self.min_consecutive
+
+        return alarm, attitude_error, err_pred, wheel_speed, wheel_pred
 
 
 # -----------------------------------------------------------------------------

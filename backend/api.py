@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT))
 # Import modules from the project
 from backend.simulator.engine import simulate_scenario
 from backend.simulator.schemas import SatelliteState
-from backend.sentinel.engines import SentinelPersistenceFilter, PhysicsSpikeFilter, score_xgboost
+from backend.sentinel.engines import SentinelPersistenceFilter, PhysicsSpikeFilter, ResidualCorrelationDetector, score_xgboost
 from backend.sherlock.agent import SherlockAgent
 from backend.sherlock.schemas import AnomalyEvent, TelemetrySnapshot, UrgencyLevel, SeverityLevel
 from backend.sherlock.telemetry_interface import TelemetryProvider
@@ -48,6 +48,7 @@ FAULT_SUBSYSTEM_MAP = {
     "eps_battery_degradation": ("EPS", "battery_soc"),
     "eps_cascade_power_failure": ("EPS", "bus_voltage"),
     "adcs_reaction_wheel_degradation": ("ADCS", "reaction_wheel_speed"),
+    "adcs_sensor_fusion_failure": ("ADCS", "attitude_error"),
 }
 
 # Demo fault scenarios exposed to the frontend picker. Kept separate from
@@ -70,6 +71,23 @@ DEMO_FAULT_SCENARIOS = [
 # so the fallback reads as a legitimate analysis, not a stub.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# GUARDIAN's tier decision reads diagnosis.urgency directly (HIGH/CRITICAL ->
+# MANUAL_INTERLOCK, else AUTOMATED_GUARDED). Every fallback diagnosis below
+# must derive urgency from the actual chosen severity — previously most of
+# them hardcoded HIGH/CRITICAL unconditionally, so GUARDIAN showed
+# MANUAL_INTERLOCK even at low severity (e.g. 0.3) regardless of what the
+# frontend's severity slider promised. Thresholds match the frontend's own
+# HIGH_RISK_SEVERITY_THRESHOLD (0.7) so the two stay in sync.
+def urgency_for_severity(severity: float) -> UrgencyLevel:
+    if severity >= 0.85:
+        return UrgencyLevel.CRITICAL
+    if severity >= 0.7:
+        return UrgencyLevel.HIGH
+    if severity >= 0.4:
+        return UrgencyLevel.MEDIUM
+    return UrgencyLevel.LOW
+
+
 def build_fallback_diagnosis(fault_scenario: str, state: SatelliteState, severity: float) -> SimpleNamespace:
     flagged_subsystem, _ = FAULT_SUBSYSTEM_MAP.get(fault_scenario, ("EPS", "unknown"))
 
@@ -84,7 +102,7 @@ def build_fallback_diagnosis(fault_scenario: str, state: SatelliteState, severit
             ],
             affected_subsystems=["TCS", "ADCS", "EPS"],
             confidence_score=0.88,
-            urgency=UrgencyLevel.CRITICAL if severity >= 0.85 else UrgencyLevel.HIGH,
+            urgency=urgency_for_severity(severity),
             time_to_critical_estimate_minutes=12,
             reasoning=(
                 f"Panel temperature reads {state.tcs.panel_temp:.1f}C against the 49.0C warning line "
@@ -92,6 +110,31 @@ def build_fallback_diagnosis(fault_scenario: str, state: SatelliteState, severit
                 "Sustained upward drift (not a transient spike) is consistent with heat-pipe conductance "
                 "failure reducing cooling effectiveness while solar/eclipse thermal input stays nominal. "
                 "No EPS or ADCS primary-fault signature precedes this, ruling out secondary-cause candidates."
+            ),
+        )
+
+    if fault_scenario == "adcs_sensor_fusion_failure":
+        return SimpleNamespace(
+            primary_root_cause=fault_scenario,
+            causal_chain=[
+                "Inertial reference unit (gyro) reports a rotation rate that disagrees with the star-tracker attitude solution",
+                "Control law trusts the false rate and commands wheel torque against a disturbance that does not exist",
+                "Attitude error rises and settles at a new, elevated equilibrium instead of converging — the wheel is working at full authority but correcting the wrong thing",
+            ],
+            affected_subsystems=["ADCS", "EPS"],
+            confidence_score=0.81,
+            urgency=urgency_for_severity(severity),
+            time_to_critical_estimate_minutes=10,
+            reasoning=(
+                f"Attitude error has plateaued at {state.adcs.attitude_error:.2f} degrees — a stable but elevated "
+                f"setpoint, not the unbounded acceleration a wheel-hardware fault would show — while reaction "
+                f"wheel speed continues falling ({state.adcs.reaction_wheel_speed:.0f} RPM), evidence the wheel is "
+                "still fully torque-capable and actively working, just against a disturbance the sensors are "
+                "reporting incorrectly. This is the same cross-channel-disagreement signature documented in "
+                "JAXA's Hitomi/ASTRO-H (2016) loss-of-mission investigation: IRU vs. star-tracker disagreement "
+                "went undetected long enough for uncorrected wheel activity to become structurally unrecoverable. "
+                "Engine C (residual correlation) flagged this from the attitude_error/reaction_wheel_speed "
+                "co-divergence well before either channel alone crossed its individual alert threshold."
             ),
         )
 
@@ -105,7 +148,7 @@ def build_fallback_diagnosis(fault_scenario: str, state: SatelliteState, severit
             ],
             affected_subsystems=["TT&C", "OBC"],
             confidence_score=0.87,
-            urgency=UrgencyLevel.CRITICAL if severity >= 0.85 else UrgencyLevel.HIGH,
+            urgency=urgency_for_severity(severity),
             time_to_critical_estimate_minutes=8,
             reasoning=(
                 f"Signal strength reads {state.ttc.signal_strength:.1f}dBm against the -90.0dBm lock threshold "
@@ -126,7 +169,7 @@ def build_fallback_diagnosis(fault_scenario: str, state: SatelliteState, severit
             ],
             affected_subsystems=["Propulsion", "ADCS", "TCS"],
             confidence_score=0.85,
-            urgency=UrgencyLevel.CRITICAL if severity >= 0.85 else UrgencyLevel.HIGH,
+            urgency=urgency_for_severity(severity),
             time_to_critical_estimate_minutes=6,
             reasoning=(
                 f"Attitude error at {state.adcs.attitude_error:.2f} degrees is rising in step with panel_temp at "
@@ -147,7 +190,7 @@ def build_fallback_diagnosis(fault_scenario: str, state: SatelliteState, severit
             ],
             affected_subsystems=["EPS"],
             confidence_score=0.83,
-            urgency=UrgencyLevel.HIGH if severity >= 0.7 else UrgencyLevel.MEDIUM,
+            urgency=urgency_for_severity(severity),
             time_to_critical_estimate_minutes=25,
             reasoning=(
                 f"Bus voltage measured {state.eps.bus_voltage:.2f}V against the 25.0V warning line while "
@@ -168,7 +211,7 @@ def build_fallback_diagnosis(fault_scenario: str, state: SatelliteState, severit
             ],
             affected_subsystems=["ADCS", "EPS", "TCS"],
             confidence_score=0.86,
-            urgency=UrgencyLevel.HIGH,
+            urgency=urgency_for_severity(severity),
             time_to_critical_estimate_minutes=15,
             reasoning=(
                 f"Attitude error reads {state.adcs.attitude_error:.2f} degrees against the 5.0 degree control "
@@ -205,26 +248,83 @@ def build_fallback_diagnosis(fault_scenario: str, state: SatelliteState, severit
         causal_chain=[fault_scenario] if fault_scenario else [],
         affected_subsystems=[flagged_subsystem],
         confidence_score=0.5,
-        urgency=UrgencyLevel.HIGH if severity >= 0.7 else UrgencyLevel.MEDIUM,
+        urgency=urgency_for_severity(severity),
         time_to_critical_estimate_minutes=20,
         reasoning=f"Offline fallback diagnosis for {fault_scenario or 'unlabeled anomaly'}.",
     )
 
 
+ACTION_PROCEDURE_STEPS = {
+    "switch_redundant_power_bus": [
+        "Verify redundant bus contactor is healthy on telemetry",
+        "Command switchover to redundant power bus",
+        "Confirm bus_voltage recovers above 25V within one telemetry cycle",
+    ],
+    "shed_nonessential_load": [
+        "Identify non-critical payload/subsystem loads eligible for shedding",
+        "Command load shed sequence (target -30% total load current)",
+        "Monitor bus_voltage stabilization over the next 2-3 telemetry frames",
+    ],
+    "reorient_maximum_solar_exposure": [
+        "Compute slew vector for maximum solar incidence given current orbit position",
+        "Command ADCS slew maneuver to the new attitude",
+        "Confirm solar_array_current increases as panels re-point into sunlight",
+    ],
+    "enter_safe_low_power_mode": [
+        "Cap CPU load to 20% and suspend non-essential background processes",
+        "Verify OBC watchdog trip counter stops incrementing",
+        "Hold safe mode until root-cause subsystem confirms nominal",
+    ],
+    "activate_backup_heater": [
+        "Force-close backup survival heater circuit override",
+        "Monitor panel_temp for the cooling-rate reversal",
+        "Release override once panel_temp re-crosses back under the 49C line",
+    ],
+    "thruster_isolation": [
+        "Command all propulsion valve actuators to closed/safe position",
+        "Confirm disturbance torque source is removed via attitude_error stabilizing",
+        "Hold isolation until ground contact for valve fault diagnosis",
+    ],
+}
+
+ACTION_REASONS = {
+    "switch_redundant_power_bus": "restores charge path capacity independent of the degraded primary bus",
+    "shed_nonessential_load": "cuts non-critical load, easing the deficit against the current bus reading",
+    "reorient_maximum_solar_exposure": "re-points the array for maximum solar incidence, restoring charging current",
+    "enter_safe_low_power_mode": "caps CPU load and halts non-essential processing to stop the compounding power draw",
+    "activate_backup_heater": "forces the backup heater circuit closed to arrest the thermal drift",
+    "thruster_isolation": "closes propulsion valve commands, removing the disturbance torque source at its origin",
+}
+
+
 def build_fallback_rationale(fault_scenario: str, best_action: str | None, state: SatelliteState) -> str:
     if not best_action:
         return "ORACLE found no viable recovery action for this fault at the current severity."
-
-    action_reasons = {
-        "switch_redundant_power_bus": "restores charge path capacity independent of the degraded primary bus",
-        "shed_nonessential_load": f"cuts non-critical load, easing the deficit against the {state.eps.bus_voltage:.1f}V bus reading",
-        "reorient_maximum_solar_exposure": "re-points the array for maximum solar incidence, restoring charging current",
-        "enter_safe_low_power_mode": "caps CPU load and halts non-essential processing to stop the compounding power draw",
-        "activate_backup_heater": f"forces the backup heater circuit closed to arrest the {state.tcs.panel_temp:.1f}C thermal drift",
-        "thruster_isolation": "closes propulsion valve commands, removing the disturbance torque source at its origin",
-    }
-    reason = action_reasons.get(best_action, "was ranked highest by the Monte Carlo safety score across all candidate actions")
+    reason = ACTION_REASONS.get(best_action, "was ranked highest by the Monte Carlo safety score across all candidate actions")
     return f"ORACLE's top-ranked action for {fault_scenario} is {best_action} — it {reason}."
+
+
+def build_fallback_options(oracle_response) -> list[dict]:
+    """
+    Real ranked options for the frontend's ATHENA display when the LLM call
+    is unavailable — every number here comes straight from ORACLE's actual
+    Monte Carlo results, not a placeholder. Top 2 by safety_score.
+    """
+    options = []
+    for r in oracle_response.results[:2]:
+        options.append({
+            "action_name": r.action_name,
+            "procedure_steps": ACTION_PROCEDURE_STEPS.get(r.action_name, [f"Execute {r.action_name}"]),
+            "safety_score": r.safety_score,
+            "effectiveness_score": r.mc_result.nominal_recovery_rate,
+            "is_irreversible": r.action_name in ("thruster_isolation",),
+            "predicted_outcome": (
+                f"{r.mc_result.nominal_recovery_rate*100:.0f}% nominal recovery, "
+                f"{r.mc_result.mission_loss_rate*100:.0f}% mission-loss risk across "
+                f"{r.mc_result.n_runs} simulated runs."
+            ),
+        })
+    return options
 
 
 app = FastAPI(title="AERO-ASTRA Streaming Bridge")
@@ -373,6 +473,7 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
     # still statistically close to the nominal false-positive rate. Do not
     # remove this comment until someone re-measures and it's actually fixed.
     physics_filter = PhysicsSpikeFilter(window_size=10, min_spikes_required=2)
+    correlation_filter = ResidualCorrelationDetector()
     window = []
 
     # Lazy init with a graceful no-API-key fallback — lets the server start
@@ -419,7 +520,18 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
             "type": "oracle_simulation",
             "best_action": oracle_response.best_action,
             "top_score": oracle_response.results[0].safety_score if oracle_response.results else 0.0,
-            "mode": oracle_response.mode
+            "mode": oracle_response.mode,
+            "results": [
+                {
+                    "action_name": r.action_name,
+                    "safety_score": r.safety_score,
+                    "nominal_recovery_rate": r.mc_result.nominal_recovery_rate,
+                    "degraded_operation_rate": r.mc_result.degraded_operation_rate,
+                    "mission_loss_rate": r.mc_result.mission_loss_rate,
+                    "flags": r.flags,
+                }
+                for r in oracle_response.results
+            ],
         }
         await manager.broadcast(oracle_msg)
 
@@ -431,6 +543,7 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
                 "rationale": build_fallback_rationale(req.fault_name, oracle_response.best_action, req.current_state),
                 "estimated_recovery_time_minutes": None,
                 "offline_fallback": True,
+                "options": build_fallback_options(oracle_response),
             })
         else:
             try:
@@ -439,7 +552,18 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
                     "type": "athena_plan",
                     "recommended_action": athena_plan.recommended_action,
                     "rationale": athena_plan.overall_reasoning,
-                    "estimated_recovery_time_minutes": 15
+                    "estimated_recovery_time_minutes": 15,
+                    "options": [
+                        {
+                            "action_name": o.action_name,
+                            "procedure_steps": o.procedure_steps,
+                            "safety_score": o.safety_score,
+                            "effectiveness_score": o.effectiveness_score,
+                            "is_irreversible": o.is_irreversible,
+                            "predicted_outcome": o.predicted_outcome,
+                        }
+                        for o in athena_plan.options
+                    ],
                 }
                 await manager.broadcast(athena_msg)
             except Exception as e:
@@ -450,6 +574,7 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
                     "rationale": build_fallback_rationale(req.fault_name, oracle_response.best_action, req.current_state),
                     "estimated_recovery_time_minutes": None,
                     "offline_fallback": True,
+                    "options": build_fallback_options(oracle_response),
                 })
 
     for frame in sim.frames:
@@ -474,7 +599,21 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
             "payload": vitals_payload
         }
         await manager.broadcast(vitals_msg)
-            
+
+        # Engine C — residual correlation. Runs every frame (not gated by the
+        # 20-frame window Engine A/B need) so the residual chart has data
+        # from t=0, and so a correlated break can be caught as early as
+        # possible rather than waiting for the window to fill.
+        corr_alarm, err_actual, err_pred, wheel_actual, wheel_pred = correlation_filter.update(
+            frame.state.adcs.attitude_error, frame.state.adcs.reaction_wheel_speed
+        )
+        await manager.broadcast({
+            "type": "residual_update",
+            "timestamp": frame.timestamp,
+            "attitude_error": {"actual": err_actual, "predicted": err_pred},
+            "reaction_wheel_speed": {"actual": wheel_actual, "predicted": wheel_pred},
+        })
+
         row = {
             'CADC0872': frame.state.adcs.attitude_error,
             'CADC0873': frame.state.adcs.reaction_wheel_speed,
@@ -489,7 +628,7 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
             alarm_flatline = persistence.update(xgb_score)
             alarm_spike, _ = physics_filter.update(df, static_mad_dict, mad_multiplier=4.0)
 
-            is_anomaly = alarm_flatline or alarm_spike
+            is_anomaly = alarm_flatline or alarm_spike or corr_alarm
 
             # Fallback for missing ML model: trigger on the worst single
             # subsystem, not the 3-way average (see vitals/agent.py — the
@@ -501,7 +640,12 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
             # Rising-edge trigger for incident latch
             if is_anomaly and not incident_in_progress:
                 incident_in_progress = True
-                triggered_engine = "BOTH" if (alarm_flatline and alarm_spike) else ("Engine A (Telemetry)" if alarm_flatline else "Engine B (Physics)")
+                firing = [n for n, f in (
+                    ("Engine A (Telemetry)", alarm_flatline),
+                    ("Engine B (Physics)", alarm_spike),
+                    ("Engine C (Residual Correlation)", corr_alarm),
+                ) if f]
+                triggered_engine = " + ".join(firing) if firing else "Engine A (Telemetry)"
 
                 sentinel_msg = {
                     "type": "sentinel_alert",
@@ -640,6 +784,18 @@ async def trigger_fault(req: FaultTriggerRequest):
     global current_stream_task
     if current_stream_task:
         current_stream_task.cancel()
+        # .cancel() only *schedules* a CancelledError for the next await
+        # point inside the task — it doesn't stop it synchronously. Without
+        # awaiting here, the old task could still be mid-frame (possibly
+        # already in an anomalous state from the previous run) and broadcast
+        # one or two more messages to every connected client after the new
+        # task has already started, which looked like the new run "auto-
+        # injecting" an anomaly or a stale CHRONICLE entry from the wrong
+        # fault leaking into the new stream.
+        try:
+            await current_stream_task
+        except asyncio.CancelledError:
+            pass
     fault = None if req.fault_name == "nominal" else req.fault_name
     current_stream_task = asyncio.create_task(simulate_stream(fault_scenario=fault, severity=req.severity))
     current_stream_task.add_done_callback(stream_task_done_callback)

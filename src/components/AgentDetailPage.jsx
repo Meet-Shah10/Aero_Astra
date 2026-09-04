@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { gsap } from 'gsap';
 import BorderGlow from './BorderGlow';
+import ResidualChart from './ResidualChart';
 import './AgentDetailPage.css';
 
 // Which BASELINE_TELEMETRY/liveTelemetry row each subsystem's fault shows up
@@ -46,6 +47,17 @@ function SentinelPage({ activeScenario, activeSeverity, isAnomaly, TELEMETRY_ROW
           ● LIVE — backend/api.py 'telemetry' @ t={liveTm.timestamp}s — ADCS.attitude_error={liveTm.subsystems.ADCS.attitude_error.toFixed(3)}°,
           ADCS.wheel={liveTm.subsystems.ADCS.reaction_wheel_speed.toFixed(1)}rpm, EPS.soc={(liveTm.subsystems.EPS.battery_soc * 100).toFixed(1)}%,
           EPS.bus_voltage={liveTm.subsystems.EPS.bus_voltage.toFixed(2)}V
+        </div>
+      )}
+      {backendOnline && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 10, letterSpacing: '0.1em', color: 'rgba(255,255,255,0.55)', textTransform: 'uppercase', marginBottom: 6 }}>
+            Engine C — Residual Correlation
+          </div>
+          <ResidualChart
+            residualHistory={backendData?.residualHistory}
+            detectTimestamp={backendData?.sentinel?.timestamp}
+          />
         </div>
       )}
       <div className="dataset-compare">
@@ -220,50 +232,79 @@ function SherlockPage({ activeScenario, isAnomaly, liveTelemetry }) {
   );
 }
 
-function OraclePage({ isAnomaly, selectedMitigation, activeScenario }) {
+function OraclePage({ isAnomaly, backendOnline, backendData }) {
   if (!isAnomaly) return <Empty label="Standby — no simulation requested." />;
+  const oracle = backendOnline ? backendData?.oracle : null;
+  if (!oracle) return <Empty label="Waiting for SENTINEL/SHERLOCK before simulation can run..." />;
+  const results = oracle.results || [];
   return (
     <>
       <p className="agent-page-lede">100 independent Monte Carlo runs per candidate action against the physics digital twin.</p>
+      <div className="live-data-badge" style={{ marginBottom: 12 }}>
+        ● LIVE — backend/oracle/agent.py — best_action={oracle.best_action}, top_score={oracle.top_score?.toFixed(2)}, mode={oracle.mode}
+      </div>
       <div className="oracle-bars">
-        <div className="oracle-bar-row">
-          <span>Do Nothing</span>
-          <div className="oracle-bar"><div className="oracle-bar-fill oracle-bar-fill--bad" style={{ width: '43%' }} /></div>
-          <span className="text-red">43% recovery</span>
-        </div>
-        <div className="oracle-bar-row">
-          <span>Throttle {activeScenario?.subsystem}</span>
-          <div className="oracle-bar"><div className="oracle-bar-fill" style={{ width: selectedMitigation === 1 ? '98%' : '80%' }} /></div>
-          <span className="text-green">{selectedMitigation === 1 ? '98%' : '80%'} recovery</span>
-        </div>
-        <div className="oracle-bar-row">
-          <span>Emergency Shutoff</span>
-          <div className="oracle-bar"><div className="oracle-bar-fill" style={{ width: '85%' }} /></div>
-          <span className="text-red">15% loss risk</span>
-        </div>
+        {results.length === 0 && (
+          <div className="text-muted" style={{ fontSize: 11 }}>No candidate actions returned by ORACLE for this fault.</div>
+        )}
+        {results.map(r => {
+          const pct = Math.round(r.nominal_recovery_rate * 100);
+          const bad = r.mission_loss_rate > 0.15;
+          return (
+            <div className="oracle-bar-row" key={r.action_name}>
+              <span>{r.action_name.replaceAll('_', ' ')}</span>
+              <div className="oracle-bar">
+                <div className={`oracle-bar-fill ${bad ? 'oracle-bar-fill--bad' : ''}`} style={{ width: `${pct}%` }} />
+              </div>
+              <span className={bad ? 'text-red' : 'text-green'}>
+                {pct}% recovery{r.mission_loss_rate > 0 ? ` · ${Math.round(r.mission_loss_rate * 100)}% loss risk` : ''}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </>
   );
 }
 
-function AthenaPage({ isAnomaly, scenarioPhase, activeScenario, selectedMitigation, setSelectedMitigation }) {
+function AthenaPage({ isAnomaly, scenarioPhase, selectedMitigation, setSelectedMitigation, backendOnline, backendData }) {
   if (!isAnomaly) return <Empty label="No mitigation required." />;
   const ready = scenarioPhase === 'planning' || scenarioPhase === 'awaiting_approval' || scenarioPhase === 'executing';
   if (!ready) return <Empty label="Waiting for SHERLOCK diagnosis before options can be generated..." />;
+  const athena = backendOnline ? backendData?.athena : null;
+  if (!athena) return <Empty label="Waiting for ORACLE simulation before ATHENA can plan..." />;
+  const options = athena.options && athena.options.length > 0
+    ? athena.options
+    : [{ action_name: athena.recommended_action, procedure_steps: [], safety_score: null, effectiveness_score: null, predicted_outcome: athena.rationale }];
   return (
     <>
       <p className="agent-page-lede">Recovery options ranked by ORACLE's simulated outcomes. Select to change the primary plan.</p>
+      {athena.offline_fallback && (
+        <div className="text-muted" style={{ fontSize: 10, marginBottom: 10 }}>
+          ATHENA LLM unavailable this run — options below are ORACLE's real Monte Carlo results, ranked deterministically (no LLM commentary).
+        </div>
+      )}
       <div className="athena-options">
-        <div onClick={() => scenarioPhase !== 'executing' && setSelectedMitigation(1)}
-          className={`athena-option ${selectedMitigation === 1 ? 'is-selected' : ''}`}>
-          <div className="athena-option-title">1. Throttle {activeScenario?.subsystem} to Safe Limits</div>
-          <div className="athena-option-meta text-green">Confidence: 98% (Safe)</div>
-        </div>
-        <div onClick={() => scenarioPhase !== 'executing' && setSelectedMitigation(2)}
-          className={`athena-option ${selectedMitigation === 2 ? 'is-selected' : ''}`}>
-          <div className="athena-option-title">2. Emergency Shutoff</div>
-          <div className="athena-option-meta text-red">Risk: 15% System Loss (CRITICAL)</div>
-        </div>
+        {options.map((opt, i) => (
+          <div key={opt.action_name} onClick={() => scenarioPhase !== 'executing' && setSelectedMitigation(i + 1)}
+            className={`athena-option ${selectedMitigation === i + 1 ? 'is-selected' : ''}`}>
+            <div className="athena-option-title">{i + 1}. {opt.action_name?.replaceAll('_', ' ')}</div>
+            {opt.effectiveness_score != null && (
+              <div className={`athena-option-meta ${opt.effectiveness_score >= 0.7 ? 'text-green' : 'text-red'}`}>
+                Nominal recovery: {Math.round(opt.effectiveness_score * 100)}%
+                {opt.is_irreversible ? ' · IRREVERSIBLE' : ''}
+              </div>
+            )}
+            {opt.predicted_outcome && (
+              <div className="text-muted" style={{ fontSize: 10, marginTop: 4 }}>{opt.predicted_outcome}</div>
+            )}
+            {opt.procedure_steps && opt.procedure_steps.length > 0 && (
+              <ol style={{ fontSize: 10, marginTop: 6, paddingLeft: 16, color: 'rgba(255,255,255,0.6)' }}>
+                {opt.procedure_steps.map((s, j) => <li key={j}>{s}</li>)}
+              </ol>
+            )}
+          </div>
+        ))}
       </div>
     </>
   );

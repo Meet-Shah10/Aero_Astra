@@ -135,6 +135,22 @@ FAULT_CATALOG: dict[str, FaultSpec] = {
         cascade_targets=["TCS", "ADCS", "OBC", "TT&C", "Propulsion"],
         ramp_time_s=10.0,   # near-instant — catastrophic hardware event
     ),
+    "adcs_sensor_fusion_failure": FaultSpec(
+        name="adcs_sensor_fusion_failure",
+        target_subsystem="ADCS",
+        description=(
+            "Inertial reference unit (gyro) reports a false rotation rate that disagrees "
+            "with the true attitude state. The control law commands wheel torque against a "
+            "disturbance that does not exist, so the wheel spins up aggressively while the "
+            "true attitude error is left uncorrected and grows in parallel — the wheel is "
+            "working hard in the wrong direction, not failing to work. Modeled on JAXA's "
+            "Hitomi/ASTRO-H (2016) loss-of-mission: IRU vs. star-tracker disagreement went "
+            "undetected long enough for uncorrected reaction wheel spin-up to exceed "
+            "structural limits, breaking the spacecraft apart 38 days after launch."
+        ),
+        cascade_targets=["EPS", "TCS"],  # ADCS→* edges: wheel current draw, off-pointing
+        ramp_time_s=45.0,
+    ),
 }
 
 
@@ -233,6 +249,27 @@ def get_fault_modifiers(
         # - step_ttc reads attitude_error for pointing loss → signal degradation
         # We only need to add the direct modifiers for things NOT already computed:
         mods["eps"]["eps_pointing_efficiency"] = 1.0 - 0.5 * eff
+
+    # ── ADCS sensor fusion failure (Hitomi/ASTRO-H signature) ─────────────────
+    elif fault_name == "adcs_sensor_fusion_failure":
+        # A false-sensed rotation is injected as a real disturbance torque —
+        # the control law reacts to it exactly as it would to a genuine
+        # disturbance. Wheel efficiency stays at 1.0 (the wheel hardware is
+        # healthy). Empirically (see roadmap notes) this produces a signature
+        # distinct from adcs_reaction_wheel_degradation: error rises fast and
+        # then PLATEAUS at a new, elevated equilibrium (~7deg at severity 0.9)
+        # once WHEEL_GAIN*error balances the injected disturbance, while wheel
+        # speed keeps declining underneath it — a healthy wheel finding a new
+        # stable-but-wrong setpoint. Degradation instead shows error
+        # accelerating with no plateau, because a degraded wheel can never
+        # generate enough torque to balance even the natural drift rate.
+        mods["adcs"]["adcs_disturbance_torque"] = 0.5 * eff
+        mods["adcs"]["adcs_wheel_efficiency"] = 1.0
+
+        # Cascades: aggressive wheel torque draws extra bus current; growing
+        # pointing error de-points the solar arrays and drifts thermal input.
+        mods["eps"]["eps_load_delta"] = 2.0 * eff
+        mods["eps"]["eps_pointing_efficiency"] = 1.0 - 0.4 * eff
 
     # ── TT&C signal dropout ───────────────────────────────────────────────────
     elif fault_name == "ttc_signal_dropout":

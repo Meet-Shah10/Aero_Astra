@@ -83,6 +83,30 @@ const FAULT_SCENARIOS = {
   },
 };
 
+// Historical case-study scenario, kept separate from FAULT_SCENARIOS so the
+// picker can render it with distinct styling — this replays a documented
+// real-world loss-of-mission, not a synthetic fault. Runs through the same
+// backend pipeline via the same faultId; SENTINEL's Engine C (residual
+// correlation) is the detector this scenario specifically exercises.
+const CASE_STUDY_SCENARIO = {
+  key: 'hitomi_case_study',
+  faultId: 'adcs_sensor_fusion_failure',
+  label: 'Sensor Fusion Failure',
+  subsystem: 'ADCS',
+  summary: 'IRU vs. star-tracker disagreement drives wheel torque against a rotation that never happened.',
+  rootCause: 'Sensor Fusion Disagreement (ADCS)',
+  causalChain: ['ADCS', 'EPS'],
+  liveOverride: { cpuUsage: '52%', epsLoad: '58%' },
+  isCaseStudy: true,
+  citation: {
+    incident: 'JAXA Hitomi / ASTRO-H (2016)',
+    source: '"Fatal Software Failures in Spaceflight," MDPI Encyclopedia (2024), DOI 10.3390/encyclopedia4020061',
+    note: 'The satellite broke apart 38 days after launch after its attitude control system misjudged a false rotation, commanded reaction wheels to counter it, and failed to unload the resulting momentum in time.',
+  },
+};
+
+const ALL_SCENARIOS = { ...FAULT_SCENARIOS, [CASE_STUDY_SCENARIO.key]: CASE_STUDY_SCENARIO };
+
 const BASELINE_TELEMETRY = {
   altitude: '540 km | 7.5 km/s',
   epsLoad: '32%',
@@ -360,6 +384,12 @@ function App() {
                 `> ⚠ SENTINEL: Anomaly detected via ${msg.triggered_engine}`,
               ]);
               break;
+            case 'residual_update':
+              setBackendData(prev => {
+                const history = [...(prev.residualHistory || []), msg].slice(-120);
+                return { ...prev, residualHistory: history };
+              });
+              break;
             case 'sherlock_diagnosis':
               setBackendData(prev => ({ ...prev, sherlock: msg }));
               setScenarioPhase(p => (p === 'detected' || p === 'nominal') ? 'diagnosing' : p);
@@ -476,7 +506,7 @@ function App() {
   // then state is driven by incoming WebSocket messages above.
   // The mock liveOverride still fills in for telemetry fields not yet streamed.
   const launchScenario = () => {
-    const scenario = FAULT_SCENARIOS[pendingScenario];
+    const scenario = ALL_SCENARIOS[pendingScenario];
     const severity = pendingSeverity;
 
     setShowScenarioPicker(false);
@@ -562,12 +592,6 @@ function App() {
       setScenarioPhase('resolved');
       setLogs(prev => [...prev, '> SYSTEM: Telemetry nominal.', '> SCRIBE: Runbook finalized. Returning to monitoring.']);
       setGuardianApproved(false);
-      const content = `AERO-ASTRA INCIDENT RUNBOOK\n============================\nDate: ${new Date().toISOString()}\nAgent: SCRIBE (Orchestrator)\n\nINCIDENT:\n- Trigger: ${scenario.label} (${scenario.faultId}), severity ${activeSeverity?.toFixed(2)}\n- Diagnosis (SHERLOCK): ${scenario.rootCause} → ${scenario.causalChain.join(' → ')}\n- Mitigation (ATHENA): Throttle ${scenario.subsystem} to safe limits\n\nEXECUTION:\n- GUARDIAN Tier: ${guardianTier}\n- Action: ${scenario.subsystem} load reduced\n- Result: Nominal.\n============================`;
-      const blob = new Blob([content], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = 'AERO_ASTRA_Runbook.txt'; a.click();
-      URL.revokeObjectURL(url);
     }, 4000);
   };
 
@@ -887,6 +911,27 @@ function App() {
               ))}
             </div>
 
+            <div style={{ fontSize: '9px', letterSpacing: '0.15em', color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', marginBottom: '8px' }}>
+              Historical Case Study
+            </div>
+            <BorderGlow borderRadius={4} glowRadius={22} fillOpacity={pendingScenario === CASE_STUDY_SCENARIO.key ? 0.5 : 0.18}
+              backgroundColor={pendingScenario === CASE_STUDY_SCENARIO.key ? 'rgba(255,180,80,0.08)' : 'rgba(255,180,80,0.03)'}>
+              <div onClick={() => setPendingScenario(CASE_STUDY_SCENARIO.key)} style={{
+                border: pendingScenario === CASE_STUDY_SCENARIO.key ? '1px solid rgba(255,180,80,0.7)' : '1px solid rgba(255,180,80,0.15)',
+                borderRadius: '4px', padding: '12px 14px', cursor: 'pointer', transition: 'all 0.15s ease', marginBottom: '22px',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '4px' }}>
+                  <span style={{ fontSize: '11px', fontWeight: 'bold', color: pendingScenario === CASE_STUDY_SCENARIO.key ? '#FFC168' : '#ccc' }}>
+                    {CASE_STUDY_SCENARIO.label}
+                  </span>
+                  <span style={{ fontSize: '8px', color: 'rgba(255,180,80,0.7)', letterSpacing: '0.1em' }}>
+                    REPLAYS {CASE_STUDY_SCENARIO.citation.incident}
+                  </span>
+                </div>
+                <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.45)', lineHeight: 1.5 }}>{CASE_STUDY_SCENARIO.summary}</div>
+              </div>
+            </BorderGlow>
+
             <div style={{ marginBottom: '24px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'rgba(255,255,255,0.5)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 <span>Severity</span>
@@ -912,6 +957,38 @@ function App() {
                 Launch Scenario
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {scenarioPhase === 'resolved' && activeScenario?.isCaseStudy && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(2,3,8,0.8)',
+          backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+        }}>
+          <div style={{
+            width: '100%', maxWidth: '600px', background: 'rgba(10,8,4,0.97)',
+            border: '1px solid rgba(255,180,80,0.4)', borderRadius: '6px', padding: '28px 32px',
+            boxShadow: '0 0 60px rgba(255,180,80,0.1), 0 20px 60px rgba(0,0,0,0.6)',
+          }}>
+            <div style={{ fontSize: '9px', letterSpacing: '0.2em', color: '#FFC168', textTransform: 'uppercase', marginBottom: '6px' }}>
+              Preventive Measure — {activeScenario.citation.incident}
+            </div>
+            <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#EDEEF2', marginBottom: '14px', lineHeight: 1.5 }}>
+              If AERO-ASTRA had been running, this failure would not have gone undetected.
+            </div>
+            <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.75)', lineHeight: 1.7, marginBottom: '14px' }}>
+              {activeScenario.citation.note} In this replay, SENTINEL's Engine C (residual correlation) flagged the
+              attitude_error / reaction_wheel_speed co-divergence within seconds of onset — well before either
+              channel alone crossed an absolute threshold — giving GUARDIAN and ATHENA time to act before the
+              condition could become structurally unrecoverable.
+            </div>
+            <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.4)', lineHeight: 1.6, marginBottom: '20px', fontStyle: 'italic' }}>
+              Source: {activeScenario.citation.source}
+            </div>
+            <button onClick={resetSystem} className="action-btn" style={{ marginTop: 0 }}>
+              Return to Monitoring
+            </button>
           </div>
         </div>
       )}
