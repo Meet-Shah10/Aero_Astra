@@ -937,7 +937,6 @@ function App() {
 {
   showDashboard && (
     <div className="dashboard-container fade-enter" style={{ paddingTop: '96px', paddingBottom: '36px' }}>
-      <VitalsCluster vitals={backendData.vitals} />
       {activeView === 'about' ? <AboutView /> : (
       <>
       {showScenarioPicker && (
@@ -1263,6 +1262,8 @@ function App() {
               Simulated pass schedule — not wired to a live scheduler yet.
             </div>
           </div>
+
+          <VitalsCluster vitals={backendData.vitals} />
 
           <div className="panel" style={{ gap: '10px', display: 'flex', flexDirection: 'column' }}>
             <div className="panel-title" style={{ marginBottom: 0 }}>SYSTEM RESOURCES</div>

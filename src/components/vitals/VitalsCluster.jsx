@@ -116,29 +116,21 @@ export default function VitalsCluster({ vitals }) {
 
   return (
     <div className="vitals-cluster">
-      <div className="vitals-header">
-        <div className="vitals-title-row">
-          <span className="vitals-title">System Vitals</span>
-          <div className="vitals-weakest">
-            <span className={`worst-health-value ${worstStatusClass}`}>
-              {Math.round(worstHealthValue * 100)}%
-            </span>
-          </div>
-        </div>
-        
-        <div className="system-health-row">
-          <span>Overall Average</span>
-          <span className="system-health-value">
-            {Math.round(systemHealth * 100)}%
-          </span>
-        </div>
-        
-        <div className="system-health-row" style={{ marginTop: '-4px' }}>
-          <span>Weakest Subsystem</span>
-          <span className={`weakest-subsystem-name ${worstStatusClass}`}>
-            {weakestName}
-          </span>
-        </div>
+      {/* Header row — matches other panel-title styling */}
+      <div className="panel-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 0 }}>
+        <span>SYSTEM VITALS</span>
+        <span className={`worst-health-value ${worstStatusClass}`} style={{ fontSize: '16px', fontWeight: 'bold' }}>
+          {Math.round(worstHealthValue * 100)}%
+        </span>
+      </div>
+
+      <div className="system-health-row" style={{ marginBottom: '4px' }}>
+        <span>Overall Avg</span>
+        <span className="system-health-value">{Math.round(systemHealth * 100)}%</span>
+      </div>
+      <div className="system-health-row" style={{ marginBottom: '8px' }}>
+        <span>Weakest</span>
+        <span className={`weakest-subsystem-name ${worstStatusClass}`}>{weakestName}</span>
       </div>
 
       <div className="vitals-grid">
