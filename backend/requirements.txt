@@ -33,5 +33,14 @@ python-dotenv
 # SCRIBE runbook templating — not yet built, needed once it is
 jinja2
 
+# ATHENA RAG pipeline (chromadb vector store + PDF ingestion + embeddings)
+chromadb>=0.5.0
+pymupdf
+pypdf
+langchain
+langchain-text-splitters
+langchain-community
+sentence-transformers
+
 # Tests
 pytest

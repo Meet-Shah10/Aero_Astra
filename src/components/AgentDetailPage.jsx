@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { gsap } from 'gsap';
 import BorderGlow from './BorderGlow';
+import OracleView from './oracle/OracleView.jsx';
 import ResidualChart from './ResidualChart';
 import './AgentDetailPage.css';
 
@@ -349,51 +350,19 @@ function SherlockPage({ activeScenario, isAnomaly, hasIncidentData, liveTelemetr
   );
 }
 
+// OraclePage: thin shell — OracleView owns its own state machine and layout.
+// We pass through backendOnline, backendData, and hasIncidentData (not
+// isAnomaly — see the App.jsx note on hasIncidentData) so OracleView both
+// auto-triggers when the backend oracle_simulation WS message arrives and
+// keeps showing the last run's real numbers after it resolves, instead of
+// resetting to DORMANT the instant AUTOMATED_GUARDED auto-resolves (~5s).
 function OraclePage({ hasIncidentData, backendOnline, backendData }) {
-  if (!hasIncidentData) return <Empty label="Standby — no simulation requested." />;
-  const oracle = backendOnline ? backendData?.oracle : null;
-  if (!oracle) return <Empty label="Waiting for SENTINEL/SHERLOCK before simulation can run..." />;
-  const results = oracle.results || [];
   return (
-    <>
-      <p className="agent-page-lede">100 independent Monte Carlo runs per candidate action against the physics digital twin.</p>
-      <div className="live-data-badge" style={{ marginBottom: 12 }}>
-        ● LIVE — backend/oracle/agent.py — best_action={oracle.best_action}, top_score={oracle.top_score?.toFixed(2)}, mode={oracle.mode}
-      </div>
-      <div className="oracle-legend">
-        <span><i className="oracle-legend-swatch oracle-legend-swatch--nominal" /> Nominal recovery</span>
-        <span><i className="oracle-legend-swatch oracle-legend-swatch--degraded" /> Degraded operation</span>
-        <span><i className="oracle-legend-swatch oracle-legend-swatch--loss" /> Mission loss</span>
-      </div>
-      <div className="oracle-dist">
-        {results.length === 0 && (
-          <div className="text-muted" style={{ fontSize: 11 }}>No candidate actions returned by ORACLE for this fault.</div>
-        )}
-        {results.map(r => {
-          const nom = Math.round(r.nominal_recovery_rate * 100);
-          const deg = Math.round(r.degraded_operation_rate * 100);
-          const loss = Math.max(0, 100 - nom - deg);
-          const isWinner = r.action_name === oracle.best_action;
-          return (
-            <div className={`oracle-dist-row ${isWinner ? 'oracle-dist-row--winner' : ''}`} key={r.action_name}>
-              <div className="oracle-dist-label">
-                <span>{r.action_name.replaceAll('_', ' ')}</span>
-                {isWinner && <span className="oracle-dist-winner-tag">SELECTED</span>}
-              </div>
-              <div className="oracle-dist-bar">
-                <div className="oracle-dist-seg oracle-dist-seg--nominal" style={{ width: `${nom}%` }} title={`Nominal recovery: ${nom}%`} />
-                <div className="oracle-dist-seg oracle-dist-seg--degraded" style={{ width: `${deg}%` }} title={`Degraded operation: ${deg}%`} />
-                <div className="oracle-dist-seg oracle-dist-seg--loss" style={{ width: `${loss}%` }} title={`Mission loss: ${loss}%`} />
-              </div>
-              <div className="oracle-dist-meta">
-                <span className="text-green">{nom}%</span> · <span style={{ color: 'rgba(255,200,100,0.9)' }}>{deg}%</span> · <span className={loss > 15 ? 'text-red' : 'text-muted'}>{loss}%</span>
-                <span className="text-muted" style={{ marginLeft: 8 }}>safety_score={r.safety_score.toFixed(2)}</span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </>
+    <OracleView
+      isAnomaly={hasIncidentData}
+      backendOnline={backendOnline}
+      backendData={backendData}
+    />
   );
 }
 
@@ -655,6 +624,16 @@ const AGENT_META = {
 
 export default function AgentDetailPage({ agent, ...props }) {
   const meta = AGENT_META[agent];
+
+  // ORACLE owns its full layout — no standard header/body wrapping
+  if (agent === 'ORACLE') {
+    return (
+      <div className="agent-page agent-page--oracle fade-enter">
+        <OraclePage {...props} />
+      </div>
+    );
+  }
+
   return (
     <div className="agent-page fade-enter">
       <div className="agent-page-header">
@@ -664,7 +643,7 @@ export default function AgentDetailPage({ agent, ...props }) {
       <div className={`agent-page-body ${agent === 'SENTINEL' || agent === 'SHERLOCK' ? '' : 'agent-page-body--narrow'}`}>
         {agent === 'SENTINEL' && <SentinelPage {...props} />}
         {agent === 'SHERLOCK' && <SherlockPage {...props} />}
-        {agent === 'ORACLE' && <OraclePage {...props} />}
+
         {agent === 'ATHENA' && <AthenaPage {...props} />}
         {agent === 'GUARDIAN' && <GuardianPage {...props} />}
         {agent === 'QUARTERMASTER' && <QuartermasterPage {...props} />}

@@ -287,7 +287,7 @@ class SherlockAgent:
         ]
         response = self._client.chat.completions.create(
             model=self._model,
-            max_completion_tokens=DEFAULT_MAX_TOKENS,
+            max_tokens=DEFAULT_MAX_TOKENS,
             temperature=self._temperature,
             messages=full_messages,
         )
