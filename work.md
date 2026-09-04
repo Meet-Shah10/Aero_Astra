@@ -16,7 +16,7 @@ The previous version of this file was written before `backend/api.py` existed an
 - [x] ATHENA — done, tested (25/25), merged from harsh-lal's branch
 - [x] `backend/api.py` — real FastAPI + WebSocket bridge, merged from Meet's `main` branch, two bugs fixed during merge
 - [ ] Frontend connected to real `api.py` — **this is the only thing standing between "impressive code that exists" and "a working demo a judge can click through"**
-- [ ] VITALS, CHRONICLE, GUARDIAN (own module), QUARTERMASTER, SCRIBE — not built
+- [ ] VITALS, CHRONICLE, GUARDIAN (own module), SCRIBE — not built
 
 **The one sentence version of what's next:** wire the frontend to the real backend — everything real is sitting behind a WebSocket nobody's frontend is listening to yet.
 
@@ -60,11 +60,7 @@ The decision logic is already correct and already running, just embedded inline 
 
 Not urgent for the demo (Engine A / physics-threshold Engine B already cover the 3 MVP faults reliably), but worth doing once the phases above are solid. A consecutive-steps filter was tried and reverted — it kills real detections along with false ones, because a spike+reversal is a one-shot event, not a sustained state. Try a rolling event-count window instead, and actually measure the false-positive/true-positive rate before shipping it, the same way the current numbers in `roadmap.md` were measured.
 
-### Phase 6 — QUARTERMASTER (mostly static)
-
-2 hardcoded ground-station passes (realistic names/times). If severity is HIGH/CRITICAL, offload 35% load to a backup satellite in a fixture fleet. Lowest judge-value agent — don't over-invest here.
-
-### Phase 7 — SCRIBE (templating, barely any code)
+### Phase 6 — SCRIBE (templating, barely any code)
 
 Jinja2 template collecting all agent outputs into a markdown runbook, matching the shape the frontend's `.txt` runbook download already produces on the mocked path. One small LLM call for a 2-3 sentence executive summary if there's time; everything else should be plain templating since it needs to be reliable in front of judges.
 
@@ -86,10 +82,9 @@ Short version: primary recommendation is Gemini Flash via OpenRouter's free tier
 
 ## 3. If You're Running Low On Time — What To Cut, In Order
 
-1. QUARTERMASTER real logic → static, clearly-labeled "simulated" output
-2. SCRIBE's LLM-written summary → template sentence instead
-3. CHRONICLE's live threshold-watching → short static log matching the scenario
-4. Engine B's spike-detector fix → ship with just Engine A + our physics-threshold Engine B, they already cover the 3 MVP faults
+1. SCRIBE's LLM-written summary → template sentence instead
+2. CHRONICLE's live threshold-watching → short static log matching the scenario
+3. Engine B's spike-detector fix → ship with just Engine A + our physics-threshold Engine B, they already cover the 3 MVP faults
 5. **Never cut:** Phase 1 (the frontend↔backend bridge), SENTINEL, SHERLOCK, ORACLE, ATHENA. Those are real, tested, and already built — protect them above everything else.
 
 ---

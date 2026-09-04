@@ -348,16 +348,6 @@
 .guardian-tier-badge--auto { color: #52ff52; background: rgba(82, 255, 82, 0.08); }
 .guardian-tier-badge--manual { color: #ff6b6b; background: rgba(255, 59, 59, 0.08); }
 
-/* QUARTERMASTER */
-.qm-note {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.55);
-  line-height: 1.7;
-  border: 1px dashed var(--border-dim);
-  border-radius: 6px;
-  padding: 16px;
-}
-
 /* CHRONICLE */
 .chronicle-full-log {
   font-family: var(--font-mono);

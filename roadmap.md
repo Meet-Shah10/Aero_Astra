@@ -22,7 +22,6 @@
 - [x] VITALS — `backend/vitals/agent.py`, real function, wired into `api.py`, streams `vitals_update` — **but see §2, one part of it fakes a detection rather than deriving it from telemetry**
 - [x] GUARDIAN — `backend/guardian/` is now its own module, 36/36 tests passing, 5-rule decision tree (more thorough than this doc's original 3-tier sketch — includes an irreversibility check and a safety-score floor)
 - [ ] CHRONICLE — not built
-- [ ] QUARTERMASTER — not built
 - [ ] SCRIBE — not built
 
 **Frontend**
@@ -50,18 +49,19 @@
 
 **Bottom line: this is a single focused work session (realistically 3-5 hours end to end, including the debugging that always eats more time than the plumbing itself), not a multi-day rebuild.** It's the highest-leverage thing left to build — everything upstream of it is real, tested backend code that currently only a Python REPL can see.
 
-**"What about CHRONICLE, QUARTERMASTER, SCRIBE — how much is left?"** Checked exhaustively, including the branch tips that got reset in §0's branch-policy note (nothing was hiding there): **none of the three exist anywhere, on any branch, in any form.** Not scaffolded, not half-built. All three are genuinely "not started," same as this doc has said since before the last few merges — that status didn't change, it just hadn't been re-confirmed after all the branch activity. Rough sizing if you're deciding where to spend remaining hours:
+**"What about CHRONICLE, SCRIBE — how much is left?"** Checked exhaustively, including the branch tips that got reset in §0's branch-policy note (nothing was hiding there): **neither exists anywhere, on any branch, in any form.** Not scaffolded, not half-built. Both are genuinely "not started," same as this doc has said since before the last few merges — that status didn't change, it just hadn't been re-confirmed after all the branch activity. Rough sizing if you're deciding where to spend remaining hours:
 - **CHRONICLE** — smallest, cheapest. It's a threshold-watcher over data `api.py` already streams (`vitals_update`, `telemetry`). No LLM. Maybe 1-2 hours including frontend wiring.
-- **QUARTERMASTER** — small, mostly static data + one conditional. 1-2 hours. Lowest judge-value of the three — don't prioritize it over finishing the frontend connection.
 - **SCRIBE** — a Jinja2 template over the full pipeline's already-existing output, plus optionally one small LLM call for a summary paragraph. 2-3 hours, more if the "download a runbook" UX gets polished.
 
-**"One LLM in ATHENA — what's the plan for the whole system?"** See §5 below — this is the section that was actually researched this pass (previous version of this doc recommended Gemini Flash from memory; that turned out to be the wrong call once actually checked). SHERLOCK and ATHENA are the only two agents that call an LLM at all — everything else in this pipeline (SENTINEL, ORACLE, GUARDIAN, the simulator) is deterministic code with zero LLM involvement, which is worth remembering when explaining the architecture: it's not "8 LLM agents," it's 2 LLM calls in an otherwise fully deterministic pipeline.
+**QUARTERMASTER has been removed from the roster entirely** — not planned, not scaffolded, not part of the agent count anywhere in the app or docs.
+
+**"One LLM in ATHENA — what's the plan for the whole system?"** See §5 below — this is the section that was actually researched this pass (previous version of this doc recommended Gemini Flash from memory; that turned out to be the wrong call once actually checked). SHERLOCK and ATHENA are the only two agents that call an LLM at all — everything else in this pipeline (SENTINEL, ORACLE, GUARDIAN, the simulator) is deterministic code with zero LLM involvement, which is worth remembering when explaining the architecture: it's not "7 LLM agents," it's 2 LLM calls in an otherwise fully deterministic pipeline.
 
 **If the goal is "get an MVP fully working," in order:**
 1. Wire the frontend↔backend connection (above) — without this, nothing else matters to a judge.
 2. Swap the LLM provider to Groq (§5) — cheap insurance against a live rate-limit, and free.
 3. Fix the flagship-fault timing bug (§2/§4.1) — the demo's headline scenario currently doesn't fire.
-4. CHRONICLE, then QUARTERMASTER, then SCRIBE, in that order, if hours remain.
+4. CHRONICLE, then SCRIBE, in that order, if hours remain.
 
 ---
 
@@ -166,9 +166,8 @@ If a telemetry value on screen reads `1.24, 1.24, 1.24, 1.24` for ten ticks in a
 4. **Swap `api.py`'s inline GUARDIAN 3-branch logic for the real `backend/guardian/` module** (36/36 tests, 5 rules — has an irreversibility check and safety-score floor the inline version doesn't). Small, mechanical change; the inline version was verified live this pass and produces correct tiers for both cases tested, so this is a quality upgrade, not a blocking fix.
 5. **Properly fix Engine B's spike-detector debounce.** The rolling event-count window helped (raw alarm count is down) but hasn't solved fault-vs-nominal separation yet (§2). Try widening the window further, or requiring spikes across *multiple different channels* rather than counting repeats on one, and measure against all 6 faults + nominal before calling it done. Not MVP-blocking — VITALS independently covers all 3 MVP faults now.
 6. **CHRONICLE** — no LLM, cheap: watch the same telemetry/vitals stream `api.py` already broadcasts, print a formatted line whenever a threshold crosses or another agent produces output.
-7. **QUARTERMASTER** — mostly static: 2 hardcoded ground-station passes, offload rule on HIGH/CRITICAL severity. Lowest judge-value agent, don't over-invest.
-8. **SCRIBE** — Jinja2 template over the full pipeline output → markdown runbook. One small LLM call for a 2-sentence executive summary; everything else plain templating (reliability > cleverness in front of judges).
-9. **Broaden the WebSocket contract** (backend.md §5's closing note) — real fields already computed internally (ORACLE's full Monte Carlo breakdown, SHERLOCK's reasoning text, all 6 subsystems in `telemetry` not just ADCS/EPS) aren't on the wire yet, so most agent detail pages besides SENTINEL/VITALS still show mocked data even when connected live. Cheap per-field, scope it per-agent.
+7. **SCRIBE** — Jinja2 template over the full pipeline output → markdown runbook. One small LLM call for a 2-sentence executive summary; everything else plain templating (reliability > cleverness in front of judges).
+8. **Broaden the WebSocket contract** (backend.md §5's closing note) — real fields already computed internally (ORACLE's full Monte Carlo breakdown, SHERLOCK's reasoning text, all 6 subsystems in `telemetry` not just ADCS/EPS) aren't on the wire yet, so most agent detail pages besides SENTINEL/VITALS still show mocked data even when connected live. Cheap per-field, scope it per-agent.
 10. **Consolidate the duplicate `SimulatorTelemetryProvider`** (§2) onto one implementation. Low priority, doesn't block anything.
 11. **Wire Meet's EPS/ADCS forecasters (`eps_tcs.py`/`adcs.py`) as a real Engine C** — real, trained, working forecast-residual capability that's currently sitting unused.
 12. **Re-tune the other weak faults** (`eps_battery_degradation`, `adcs_reaction_wheel_degradation`) in `faults.py` so more than 3 are demo-viable.

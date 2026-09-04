@@ -98,7 +98,7 @@ When should an AI system act autonomously, and when should it call a human? This
 
 ### The Multi-Agent Architecture
 
-AERO-ASTRA is a **9-agent swarm** where each agent owns exactly one stage of the FDIR (Fault Detection, Isolation, and Recovery) pipeline. No agent does more than one job. This is not decorative modularity — it's architecturally necessary because:
+AERO-ASTRA is an **8-agent swarm** where each agent owns exactly one stage of the FDIR (Fault Detection, Isolation, and Recovery) pipeline. No agent does more than one job. This is not decorative modularity — it's architecturally necessary because:
 
 1. Each stage has completely different compute requirements (sub-millisecond XGBoost vs. 3-second LLM call)
 2. Each stage has different failure modes that need independent fallbacks
@@ -115,7 +115,6 @@ The agents and their responsibilities:
 | **ATHENA** | Recovery planning | Claude Sonnet 4.5, temperature=0.15, Two-Schema anti-hallucination | 2–4 seconds |
 | **GUARDIAN** | Safety gate | Severity-based tiering, ECSS-aligned authority levels | <1ms |
 | **CHRONICLE** | Live event log | WebSocket streaming, every decision timestamped | Real-time |
-| **QUARTERMASTER** | Fleet logistics | Planned — ground station coordination, orbit scheduling | — |
 | **SCRIBE** | Audit trail | Full decision provenance, ECSS compliance documentation | — |
 
 **Total pipeline: 3–6 seconds from anomaly detection to recovery execution or human approval request.**

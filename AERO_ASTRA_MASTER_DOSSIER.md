@@ -69,12 +69,11 @@ Telemetry Stream
                      │(Safety Gate) │
                      └──────┬───────┘
                             │
-              ┌─────────────┴─────────────┐
-              ▼                           ▼
-       ┌──────────────┐            ┌──────────────┐
-       │QUARTERMASTER │            │    SCRIBE    │
-       │(Scheduling)  │            │  (Runbooks)  │
-       └──────────────┘            └──────────────┘
+                            ▼
+                     ┌──────────────┐
+                     │    SCRIBE    │
+                     │  (Runbooks)  │
+                     └──────────────┘
 ```
 
 | Agent | Pitch Role | Technical Implementation |
@@ -86,8 +85,7 @@ Telemetry Stream
 | **5. ORACLE** | *"The Simulator"* | Digital twin Monte Carlo engine. Simulates candidate recovery actions across $N=1,000$ stochastic physics runs to calculate survival probability and margin restoration. |
 | **6. ATHENA** | *"The Strategist"* | Recovery procedure planner. Uses Chain-of-Thought LLM with an anti-hallucination two-schema pattern: LLM plans qualitative steps, Python injects deterministic ORACLE scores. |
 | **7. GUARDIAN** | *"The Safety Gate"* | Non-LLM, rule-based safety gate backed by Z3 SMT Theorem Prover. Evaluates aerospace FDIR doctrine: emergency safe mode vs human-in-the-loop authorization gate. |
-| **8. QUARTERMASTER**| *"The Logistics Manager"*| Constellation task scheduler. Reallocates orbital payload tasks to sibling satellites and reschedules ground station contact passes (e.g., Kiruna, Svalbard). |
-| **9. SCRIBE** | *"The Accountant"* | Aggregates all telemetry, causal diagnoses, simulation distributions, and operator authorizations into an auditable Word/PDF/Markdown runbook. |
+| **8. SCRIBE** | *"The Accountant"* | Aggregates all telemetry, causal diagnoses, simulation distributions, and operator authorizations into an auditable Word/PDF/Markdown runbook. |
 
 ---
 
@@ -161,7 +159,7 @@ AERO-ASTRA explicitly documents what data is real vs. synthetic:
   - 8-Agent Swarm status sidebar with live pulse indicators.
   - Active Triage, Fleet Status, and Runbook Archive navigation.
 - **V2 7-Stage Triage Stepper (`frontend/src/v2/`):**
-  - Complete 7-stage visual incident flow (SENTINEL $\to$ SHERLOCK $\to$ ORACLE $\to$ ATHENA $\to$ GUARDIAN $\to$ QUARTERMASTER $\to$ SCRIBE).
+  - Complete 6-stage visual incident flow (SENTINEL $\to$ SHERLOCK $\to$ ORACLE $\to$ ATHENA $\to$ GUARDIAN $\to$ SCRIBE).
   - Preserved safely on disk, set aside from active render flow as requested.
 
 ---

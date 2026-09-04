@@ -48,7 +48,7 @@ Expect ~5 frames printed... actually 61 frames (duration/dt + 1), panel_temp cli
 | `backend/api.py` | ✅ **Built and verified live end-to-end** | No longer the blocker — confirmed working via a real browser session against a real running server: fault injected → SENTINEL fired → SHERLOCK stub diagnosed → GUARDIAN computed the correct tier → human approved → runbook executed → system returned to nominal. See §5 for the exact wire contract and the 3 real crash bugs found and fixed getting here. |
 | `backend/vitals/agent.py` | ✅ Built, recalibrated, verified live | `calculate_vitals(state)` — real heuristic health scores from telemetry only (no fault-label shortcuts). Recalibrated this pass: `panel_temp` warn line moved from 85°C (never fired in a 600s demo run) to 49°C, verified zero false positives across 7 random seeds. Also added `worst_health = min(eps, tcs, adcs)` since the averaged `system_health` was masking single-subsystem failures. |
 | `backend/guardian.py` (inline in `api.py`, not a separate file) | ✅ Built, verified live | 3-tier logic matches §4.2 below almost exactly — implemented directly inside `simulate_stream()` rather than as a standalone module. Confirmed live: severity 0.7 fault correctly produced `MANUAL_INTERLOCK`, severity 0.3 correctly produced a different tier (test both before assuming which path a demo run will take — see §5). |
-| `backend/chronicle.py`, `quartermaster.py`, `scribe.py` | ❌ Not built | Frontend has a placeholder `CHRONICLE`/`QUARTERMASTER`/`SCRIBE` UI already; backend doesn't broadcast these message types yet. Build order in §4, Phases 5-6. |
+| `backend/chronicle.py`, `scribe.py` | ❌ Not built | Frontend has a placeholder `CHRONICLE`/`SCRIBE` UI already; backend doesn't broadcast these message types yet. Build order in §4, Phase 5. |
 | `backend/requirements.txt` | ✅ Exists now | Didn't before. Pinned from actually grepping every import in `backend/`. Now also includes `python-dotenv` (api.py calls `load_dotenv()` on import). |
 
 ---
@@ -166,9 +166,6 @@ def check_thresholds(state) -> list[str]:
 
 `backend/athena/agent.py` exists, is tested (25/25 passing), and is verified byte-for-byte compatible — it imports `SherlockDiagnosis`/`OracleResponse` directly rather than redefining them, and its `demo.py` already chains SENTINEL → SHERLOCK → ORACLE → ATHENA end to end, including calling `sentinel/engine_b.py`. `AthenaAgent().plan(sherlock_diagnosis, oracle_response)` → `RecoveryPlan`; call `.to_ws_message()` for the exact `athena` WS shape below. Nothing left to build here — `api.py` just wires it in.
 
-### Phase 5 — QUARTERMASTER (mostly static)
-
-2 hardcoded ground-station passes (realistic names/times). If `urgency` is HIGH/CRITICAL, offload 35% load to a backup satellite in a fixture fleet.
 
 ### Phase 6 — SCRIBE (templating)
 
@@ -367,5 +364,5 @@ If all 4 pass, the backend half of the MVP is real and the frontend can build ag
 ## 8. Stretch goals (only after the MVP demos clean, twice, end to end)
 
 - Re-tune the 3 weak faults in `faults.py` (§3)
-- QUARTERMASTER, SCRIBE (§4 Phases 5-6) — ATHENA is done, see §4 Phase 4
+- SCRIBE (§4 Phase 5) — ATHENA is done, see §4 Phase 4
 - LSTM/Telemanom-style forecast-residual as a 3rd detection engine — tested and **not recommended as a priority**: on this simulator's slow ramp faults, a short-horizon forecaster's residual barely rises above noise (measured directly, see `audit_findings.md` §4). It also needs real retraining time (`sentinel_lstm.pt` is currently broken, same as §2). Only worth it once everything else is solid and there are still hours left.

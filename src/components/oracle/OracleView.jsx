@@ -43,20 +43,26 @@ const INITIAL_STATE = {
 };
 
 // ─── Dormant view ─────────────────────────────────────────────────────────────
-function DormantView({ isAnomaly, backendOnline, onStart }) {
-  // Different messaging depending on context
+// No manual "trigger" button — this used to offer one that ran the offline
+// fixture simulator even while genuinely connected to the backend, which
+// meant a click while a real anomaly was mid-pipeline could silently swap
+// in fabricated numbers indistinguishable from a real ORACLE run. ORACLE
+// always auto-starts the moment the real oracle_simulation WS message
+// arrives (see the useEffect below); there's no legitimate reason for a
+// manual override that risks showing fake data as if it were real.
+function DormantView({ isAnomaly, backendOnline }) {
   let msg = 'Awaiting proposed action(s) from ATHENA.';
   let subMsg = null;
-  let showBtn = true;
 
   if (!isAnomaly) {
     msg = 'No anomaly detected.';
     subMsg = 'ORACLE will activate once SENTINEL flags a fault and SHERLOCK completes diagnosis.';
-    showBtn = false;
   } else if (backendOnline) {
     msg = 'Waiting for ORACLE simulation from backend…';
     subMsg = 'Simulation will begin automatically once SHERLOCK diagnosis is received.';
-    showBtn = true; // allow manual trigger as override
+  } else {
+    msg = 'Backend offline — no simulation available.';
+    subMsg = 'ORACLE requires a live connection to backend/oracle/agent.py to run.';
   }
 
   return (
@@ -72,15 +78,6 @@ function DormantView({ isAnomaly, backendOnline, onStart }) {
       <div className="oracle-dormant-msg">{msg}</div>
       {subMsg && (
         <div className="oracle-dormant-sub">{subMsg}</div>
-      )}
-      {showBtn && (
-        <button
-          className="oracle-sim-btn"
-          style={{ marginTop: 4, borderColor: '#3B82F6', color: '#3B82F6' }}
-          onClick={onStart}
-        >
-          ▶ {backendOnline ? 'TRIGGER MOCK RUN' : 'TRIGGER SIMULATION'}
-        </button>
       )}
     </div>
   );
@@ -278,7 +275,6 @@ export default function OracleView({ backendOnline = false, backendData = null, 
             <DormantView
               isAnomaly={isAnomaly}
               backendOnline={backendOnline}
-              onStart={() => launchSimulatorRef.current(backendData?.oracle ?? null)}
             />
           </motion.div>
         )}

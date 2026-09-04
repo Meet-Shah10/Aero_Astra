@@ -442,22 +442,6 @@ function GuardianPage({ hasIncidentData, guardianTier, guardianApproved, scenari
   );
 }
 
-function QuartermasterPage({ isAnomaly, activeScenario }) {
-  return (
-    <>
-      <p className="agent-page-lede">Ground-station coordination and fleet load-shifting. Marked PLANNED — not wired to a live scheduler yet.</p>
-      {isAnomaly ? (
-        <div className="qm-note">
-          <div>If {activeScenario?.subsystem} load must be offloaded, QUARTERMASTER would shift it to the next
-            available satellite in the fleet and log the handoff window.</div>
-        </div>
-      ) : (
-        <Empty label="Standby for mitigation models." />
-      )}
-    </>
-  );
-}
-
 function ScribePage({ isAnomaly, scenarioPhase, guardianTier, guardianApproved, executeRunbook, scribeReport }) {
   const canExecute = isAnomaly && (guardianTier === 'AUTOMATED_GUARDED' || guardianApproved) && scenarioPhase === 'awaiting_approval';
   return (
@@ -616,7 +600,6 @@ const AGENT_META = {
   ORACLE: { role: 'The Simulator' },
   ATHENA: { role: 'The Strategist' },
   GUARDIAN: { role: 'The Safety Gate' },
-  QUARTERMASTER: { role: 'The Logistics Manager' },
   SCRIBE: { role: 'The Accountant' },
   CHRONICLE: { role: 'The Live Log' },
   VITALS: { role: 'The Proactive Monitor' },
@@ -646,7 +629,6 @@ export default function AgentDetailPage({ agent, ...props }) {
 
         {agent === 'ATHENA' && <AthenaPage {...props} />}
         {agent === 'GUARDIAN' && <GuardianPage {...props} />}
-        {agent === 'QUARTERMASTER' && <QuartermasterPage {...props} />}
         {agent === 'SCRIBE' && <ScribePage {...props} />}
         {agent === 'CHRONICLE' && <ChroniclePage {...props} />}
         {agent === 'VITALS' && <VitalsPage {...props} />}

@@ -26,7 +26,6 @@ const AGENT_ROSTER = [
   { code: 'ORACLE', role: 'The Simulator', desc: 'Runs 100 independent Monte Carlo simulations of each candidate fix before anything executes — odds, not guesses.', status: 'wired' },
   { code: 'ATHENA', role: 'The Strategist', desc: "Using ORACLE's simulations, picks the best recovery plan and writes out every step, in order, with its reasoning.", status: 'wired' },
   { code: 'GUARDIAN', role: 'The Safety Gate', desc: 'Low-risk fixes auto-execute and log themselves. High-risk fixes wait for a human to press approve — nothing executes without it.', status: 'wired' },
-  { code: 'QUARTERMASTER', role: 'The Logistics Manager', desc: 'Coordinates with ground stations and, if needed, shifts load to other satellites in the fleet.', status: 'planned' },
   { code: 'SCRIBE', role: 'The Accountant', desc: "Every decision, every step, every agent's reasoning gets written into an audit trail automatically.", status: 'planned' },
   { code: 'CHRONICLE', role: 'The Live Log', desc: 'A running event log of everything happening, in real time, as it happens.', status: 'wired' },
   { code: 'VITALS', role: 'The Proactive Monitor', desc: 'Tracks subsystem health scores and remaining-useful-life estimates so degradation is visible before it becomes an anomaly.', status: 'wired' },
@@ -1169,7 +1168,7 @@ function App() {
 
           <div className="bottom-bar">
             <div className="bottom-section">
-              <div className="panel-title">AGENT: QUARTERMASTER (SANDBOX)</div>
+              <div className="panel-title">AGENT: ATHENA (STRATEGIST)</div>
               {(scenarioPhase === 'planning' || scenarioPhase === 'awaiting_approval' || scenarioPhase === 'executing') ? (
                 <div style={{ fontSize: '12px', marginTop: '8px', lineHeight: 1.7 }}>
                   Simulating mitigation options...<br />
@@ -1244,7 +1243,7 @@ function App() {
             <div className="data-row"><span>Orbit</span><span className="text-cyan">#{missionStart ? 4127 + Math.floor((Date.now() - missionStart) / 5400000) : 4127}</span></div>
             <div className="data-row"><span>Alt / Vel</span><span>540 km | 7.5 km/s</span></div>
             <div className="text-muted" style={{ fontSize: '9px', marginTop: '8px', lineHeight: 1.5 }}>
-              Simulated pass schedule — QUARTERMASTER will replace this with real fleet coordination once built.
+              Simulated pass schedule — not wired to a live scheduler yet.
             </div>
           </div>
 

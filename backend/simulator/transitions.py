@@ -324,10 +324,20 @@ def step_adcs(
     obc_blind: if True, OBC command loop is halted (OBC→ADCS command_control edge);
                control law is suspended, drift accumulates at full rate.
     """
-    wheel_efficiency = (
-        fault_mods.get("adcs_wheel_efficiency", 1.0)
-        * recovery_mods.get("adcs_wheel_efficiency", 1.0)
-    )
+    # Fault and recovery combine as max(), not product, when a recovery value
+    # is actually present. A multiplicative combine meant "reorient" (which
+    # sets recovery=0.5, representing a slew-based partial workaround) could
+    # never lift wheel_efficiency above 0.5 * fault_value — against a fault
+    # that degrades efficiency to e.g. 0.01, that's 0.005, indistinguishable
+    # from no recovery at all. max() reflects what the action is actually
+    # supposed to model: an alternate pointing/control path that doesn't
+    # depend on the same degraded wheel authority the fault reduced.
+    fault_wheel_eff = fault_mods.get("adcs_wheel_efficiency", 1.0)
+    recovery_wheel_eff = recovery_mods.get("adcs_wheel_efficiency", 1.0)
+    if "adcs_wheel_efficiency" in recovery_mods:
+        wheel_efficiency = max(fault_wheel_eff, recovery_wheel_eff)
+    else:
+        wheel_efficiency = fault_wheel_eff
     wheel_efficiency = _clamp(wheel_efficiency, 0.0, 1.0)
 
     disturbance = fault_mods.get("adcs_disturbance_torque", 0.0)

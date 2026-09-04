@@ -61,12 +61,11 @@ Telemetry Stream
                      │(Safety Gate) │
                      └──────┬───────┘
                             │
-              ┌─────────────┴─────────────┐
-              ▼                           ▼
-       ┌──────────────┐            ┌──────────────┐
-       │QUARTERMASTER │            │    SCRIBE    │
-       │(Scheduling)  │            │  (Runbooks)  │
-       └──────────────┘            └──────────────┘
+                            ▼
+                     ┌──────────────┐
+                     │    SCRIBE    │
+                     │  (Runbooks)  │
+                     └──────────────┘
 ```
 
 | Agent | Pitch Metaphor | Technical Implementation & Responsibility |
@@ -78,8 +77,7 @@ Telemetry Stream
 | **5. ORACLE** | *"The Simulator"* | **Digital Twin Monte Carlo Engine:** Simulates candidate recovery actions across $N=1,000$ physics rollouts. Computes survival probabilities, risk ratings, and margin recovery metrics. |
 | **6. ATHENA** | *"The Strategist"* | **Recovery Procedure Planner:** Uses Chain-of-Thought LLM with an anti-hallucination two-schema architecture: LLM generates procedural steps, while Python injects deterministic ORACLE survival scores and checks `IRREVERSIBLE_ACTIONS`. |
 | **7. GUARDIAN** | *"The Safety Gate"* | **Non-LLM Formal Safety Gate:** Evaluates aerospace FDIR doctrine (Emergency Safe Mode vs. Human Authorization Gate) using deterministic rules and the Z3 SMT Theorem Prover. |
-| **8. QUARTERMASTER** | *"The Logistics Manager"* | Constellation resource scheduler. Rebalances payload workloads across sibling satellites and schedules ground station passes (Kiruna, Svalbard). |
-| **9. SCRIBE** | *"The Accountant"* | Aggregates all telemetry, causal paths, Monte Carlo distributions, and operator authorizations into an auditable Markdown/PDF runbook. |
+| **8. SCRIBE** | *"The Accountant"* | Aggregates all telemetry, causal paths, Monte Carlo distributions, and operator authorizations into an auditable Markdown/PDF runbook. |
 
 ---
 
@@ -161,8 +159,8 @@ Audited and verified in `audit_findings.md` to ensure zero false positives and 1
    - Move the inline decision logic inside `api.py` into a dedicated, clean module with Z3 invariant proofs.
 4. **Phase 4 — SCRIBE Runbook Generation (`backend/scribe.py`):**
    - Jinja2 template compiling diagnosis, Monte Carlo distributions, and authorization records into an exportable Markdown/PDF runbook.
-5. **Phase 5 — QUARTERMASTER & VITALS:**
-   - Static/semi-static constellation pass rebalancing and health index scoring.
+5. **Phase 5 — VITALS:**
+   - Health index scoring and remaining-useful-life estimation.
 
 ---
 
