@@ -5,7 +5,7 @@
 import { useMemo, useEffect, useLayoutEffect, useRef, useState, Suspense } from 'react';
 import { motion, useMotionValue, useTransform, animate } from 'motion/react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { useGLTF } from '@react-three/drei';
+import { useGLTF, Center } from '@react-three/drei';
 import * as THREE from 'three';
 import './OrbitSatellite.css';
 
@@ -17,25 +17,18 @@ function generateEllipsePath(cx, cy, rx, ry) {
 /* ── Tiny inline satellite mesh ─────────────────────────────────── */
 function MiniSatellite({ url }) {
   const { scene } = useGLTF(url);
-  const cloned = useMemo(() => {
-    const c = scene.clone(true);
-    // Normalise into a unit sphere
-    const box = new THREE.Box3().setFromObject(c);
-    const sphere = box.getBoundingSphere(new THREE.Sphere());
-    const s = 1 / (sphere.radius * 2);
-    c.position.set(-sphere.center.x * s, -sphere.center.y * s, -sphere.center.z * s);
-    c.scale.setScalar(s);
-    return c;
-  }, [scene]);
-
+  const cloned = useMemo(() => scene.clone(true), [scene]);
   const ref = useRef();
+
   useFrame((_, dt) => {
     if (ref.current) ref.current.rotation.y += 0.6 * dt;
   });
 
   return (
     <group ref={ref}>
-      <primitive object={cloned} />
+      <Center scale={0.5}>
+        <primitive object={cloned} />
+      </Center>
     </group>
   );
 }
