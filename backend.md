@@ -174,63 +174,78 @@ Jinja2 template over the full pipeline output → markdown runbook. One small Cl
 
 ---
 
-## 5. WebSocket message contract (`/ws/mission`)
+## 5. WebSocket message contract (`/ws`) — verified against the actual running code, 2026-09-05
 
-This is the shared contract — frontend builds against these shapes without needing to read backend code, and vice versa. 3 of these existed before; the other 5 (`oracle`, `guardian`, `athena`, `quartermaster`, `scribe`) are newly specified here, sourced directly from the real Pydantic schemas so there's no drift between what's documented and what the code actually returns.
+**This section was wrong before.** It was written speculatively, before `api.py` existed, then `api.py` evolved through several real merges and the doc was never re-synced. This version is transcribed directly from `backend/api.py`'s `simulate_stream()` — every field below is copy-checked against the literal `manager.broadcast({...})` calls in the source, not reconstructed from the Pydantic schemas. If frontend work stalls on "the contract doesn't match what's coming over the wire," this was why — it's fixed now, but re-verify against source if `api.py` changes again before someone reads this.
+
+**Endpoint note:** it's `/ws`, not `/ws/mission` as earlier drafts said. Triggering a run is `POST /trigger` with `{"fault_name": "tcs_thermal_runaway", "severity": 0.7}` (`fault_name: "nominal"` or `null` runs clean telemetry with no fault). This cancels whatever stream is currently running and starts a new one — the frontend does not need to reconnect the WebSocket to change faults, only re-POST `/trigger`.
 
 ```jsonc
-// 1. telemetry — one per simulated dt step
-{"type": "telemetry", "ts": 240, "battery_soc": 0.72, "bus_voltage": 28.4,
- "panel_temp": 42.1, "cpu_load": 0.74, "signal_strength": -87.0,
- "attitude_error": 0.6, "thruster_temp": 21.0}
+// 1. telemetry — broadcast once per simulated second (real settings: dt=1s, duration=600s)
+{"type": "telemetry", "timestamp": 42.0,
+ "subsystems": {
+   "ADCS": {"attitude_error": 0.52, "reaction_wheel_speed": 1204.3},
+   "EPS":  {"battery_soc": 0.849, "bus_voltage": 28.91}
+ }}
+// NOTE: only ADCS + EPS are included right now, not all 6 subsystems (TCS/OBC/TTC/
+// Propulsion aren't broadcast in telemetry — read them from vitals_update instead,
+// or extend this message if the frontend needs them directly).
 
-// 2. sentinel_alert — fires when combined_score() crosses threshold
-{"type": "sentinel_alert", "anomaly_id": "ANO-001", "score": 0.94,
- "ml_score": 0.37, "engine_b_score": 0.94, "worst_param": "panel_temp_hot",
- "flagged_subsystem": "TCS"}
+// 2. vitals_update — also broadcast every second, real calculate_vitals() output
+{"type": "vitals_update", "timestamp": 42.0,
+ "payload": {"eps_health": 0.97, "tcs_health": 1.0, "adcs_health": 1.0, "system_health": 0.99}}
 
-// 3. sherlock_diagnosis — maps 1:1 to SherlockDiagnosis (backend/sherlock/schemas.py)
+// 3. sentinel_alert — fires once per triggered run (rising-edge latch, not repeated)
+{"type": "sentinel_alert", "is_anomaly": true,
+ "triggered_engine": "Engine A (Telemetry)",  // or "Engine B (Physics)" or "BOTH"
+ "timestamp": 87.0}
+// NOTE: no anomaly_id, no score field, no flagged_subsystem — earlier drafts of
+// this doc invented these. SENTINEL currently always hardcodes flagged_subsystem
+// to "EPS" internally when building the AnomalyEvent for SHERLOCK (see roadmap.md
+// §2/§4 — same limitation noted there), regardless of which fault is actually running.
+
+// 4. sherlock_diagnosis
 {"type": "sherlock_diagnosis", "primary_root_cause": "TCS",
- "causal_chain": ["TCS", "ADCS", "EPS"], "affected_subsystems": ["TCS", "ADCS", "EPS"],
- "confidence_score": 0.91, "urgency": "HIGH", "time_to_critical_estimate_minutes": 23,
- "reasoning": "...", "graph_candidate_set": ["TCS", "..."], "llm_attempts": 1}
+ "causal_chain": ["TCS", "ADCS", "EPS"], "confidence_score": 0.91,
+ "urgency": "HIGH", "time_to_critical": 23}
+// NOTE: field is "time_to_critical", not "time_to_critical_estimate_minutes" —
+// api.py renames it when building the message. No reasoning/graph_candidate_set/
+// llm_attempts fields are sent over the wire even though SherlockDiagnosis has them.
 
-// 4. oracle — maps 1:1 to OracleResponse (backend/oracle/schemas.py)
-{"type": "oracle", "request_id": "uuid", "mode": "ranking",
- "results": [
-   {"action_name": "shed_nonessential_load",
-    "mc_result": {"nominal_recovery_rate": 0.87, "degraded_operation_rate": 0.10,
-                  "mission_loss_rate": 0.03, "mean_final_battery_soc": 0.71,
-                  "mean_final_attitude_error": 1.2, "n_runs": 100, "steps": 300},
-    "safety_score": 0.84, "flags": []},
-   {"action_name": "do_nothing", "mc_result": {"...": "..."}, "safety_score": -0.31,
-    "flags": ["HIGH_MISSION_LOSS_RATE"]}
- ],
- "best_action": "shed_nonessential_load", "response_flags": []}
+// 5. guardian_action — NOT "guardian". Fires right after sherlock_diagnosis.
+{"type": "guardian_action", "status": "MANUAL_INTERLOCK",  // or AUTOMATED_GUARDED / AUTONOMOUS_SAFED
+ "action_taken": null}  // non-null only for AUTONOMOUS_SAFED, e.g. "shed_nonessential_load"
+// NOTE: there is no separate "approve" endpoint or "guardian_executed" follow-up
+// message yet — GUARDIAN's decision is informational only right now, nothing in
+// api.py currently blocks on or reacts to a frontend approval click.
 
-// 5. guardian — output of guardian_decide() in §4.2
-{"type": "guardian", "tier": "MANUAL_INTERLOCK", "auto_executes": false,
- "requires_human_approval": true, "action": "shed_nonessential_load",
- "request_id": "uuid-matching-oracle-request_id"}
-// once approved via POST /approve, push a follow-up:
-{"type": "guardian_executed", "action": "shed_nonessential_load",
- "executed_at": "2026-09-03T16:22:54Z", "approved_by_operator": true}
+// 6. oracle_simulation — NOT "oracle". Broadcast from a background task after
+//    sentinel_alert/sherlock_diagnosis, does not block the telemetry stream.
+{"type": "oracle_simulation", "best_action": "shed_nonessential_load",
+ "top_score": 0.84, "mode": "ranking"}
+// NOTE: none of ORACLE's actual per-action Monte Carlo results (nominal_recovery_rate,
+// mission_loss_rate, etc.) are sent — only the single best action + its score.
 
-// 6. athena — once Phase 4 is built
-{"type": "athena", "primary_action": "shed_nonessential_load",
- "reasoningCoT": ["ORACLE ranked this action highest (safety_score 0.84)...", "..."],
- "steps": [{"order": 1, "action": "shed_nonessential_load",
-            "description": "...", "estimated_duration_s": 30, "reversible": true}]}
+// 7. athena_plan — NOT "athena". Broadcast right after oracle_simulation, same
+//    background task, only if ATHENA's LLM call succeeds (silently logged + skipped
+//    if it throws, e.g. no OPENROUTER_API_KEY — no error message reaches the frontend).
+{"type": "athena_plan", "recommended_action": "shed_nonessential_load",
+ "rationale": "...", "estimated_recovery_time_minutes": 15}
+// NOTE: "estimated_recovery_time_minutes": 15 is a hardcoded constant in api.py
+// right now, not derived from anything. reasoningCoT/steps/options are not sent.
 
-// 7. quartermaster — once Phase 5 is built
+// 8. quartermaster / scribe — do not exist. Neither agent is built, nothing
+//    broadcasts these types. Kept below as the still-aspirational target shape
+//    for whoever builds them — not verified against real code because there
+//    isn't any yet.
 {"type": "quartermaster",
  "ground_station_passes": [{"station": "Svalbard", "aos": "...", "los": "...", "duration_s": 480}],
  "load_offload": {"triggered": true, "target_satellite": "AERO-ASTRA-2", "offload_pct": 35}}
-
-// 8. scribe — once Phase 6 is built
 {"type": "scribe", "runbook_markdown": "# Incident Runbook\n...",
  "download_filename": "aero_astra_runbook_2026-09-03.md"}
 ```
+
+**What this means for wiring the frontend:** the message shapes above are noticeably thinner than what `src/App.jsx`'s mocked `FAULT_SCENARIOS` currently models (no per-parameter diff data, no causal reasoning text, no full ORACLE Monte Carlo breakdown, only 2 of 6 subsystems in `telemetry`). Wiring the frontend to this real contract as-is means either (a) the frontend's rich agent-detail pages fall back to "field not available yet" for anything not in the list above, or (b) `api.py` gets extended to broadcast more of what the agents already compute internally (cheap — the data already exists in `oracle_response`/`diagnosis`/etc., it's just not put on the wire yet). Option (b) is probably right for most fields; scope it per-agent rather than doing it all at once.
 
 `POST /trigger` body: `{"fault": "tcs_thermal_runaway", "severity": 0.7}`
 `POST /approve` body: `{"request_id": "uuid-from-guardian-message", "approved": true}`

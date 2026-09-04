@@ -40,6 +40,30 @@
 
 ---
 
+## 0.5. How to actually work from here — answers to the questions that keep coming up
+
+**"Is frontend↔backend connection a big task or just not started?"** Genuinely checked, not guessed: **it's not started, and it's not huge, but it's also not trivial.** Concretely, three things stand between here and a working demo:
+1. Add a `WebSocket('ws://localhost:8000/ws')` connection and a `fetch('/trigger', {method:'POST', ...})` call to `src/App.jsx` — mechanical, an hour or two.
+2. **The real reason nobody's done it yet:** the WebSocket contract documented in `backend.md` §5 was written speculatively before `api.py` existed, then went stale as `api.py` evolved through several real merges. Nobody had an accurate target to build against — the doc said `"type": "oracle"`, the code sends `"type": "oracle_simulation"`; the doc invented fields like `sentinel_alert.score` that don't exist on the wire. **This is now fixed** — `backend.md` §5 is rewritten this pass, transcribed directly from the actual `manager.broadcast()` calls in `api.py`, not reconstructed from schemas.
+3. Once wired, the real messages are noticeably thinner than the mocked `FAULT_SCENARIOS` data the frontend currently shows (e.g. `telemetry` only carries ADCS+EPS, not all 6 subsystems; `sherlock_diagnosis` has no reasoning text on the wire even though SHERLOCK generates it). Either the frontend's agent-detail pages gracefully show "not available yet" for missing fields, or `api.py` gets extended to broadcast more of what each agent already computes internally — cheap per-field, but it's real work, not a formality.
+
+**Bottom line: this is a single focused work session (realistically 3-5 hours end to end, including the debugging that always eats more time than the plumbing itself), not a multi-day rebuild.** It's the highest-leverage thing left to build — everything upstream of it is real, tested backend code that currently only a Python REPL can see.
+
+**"What about CHRONICLE, QUARTERMASTER, SCRIBE — how much is left?"** Checked exhaustively, including the branch tips that got reset in §0's branch-policy note (nothing was hiding there): **none of the three exist anywhere, on any branch, in any form.** Not scaffolded, not half-built. All three are genuinely "not started," same as this doc has said since before the last few merges — that status didn't change, it just hadn't been re-confirmed after all the branch activity. Rough sizing if you're deciding where to spend remaining hours:
+- **CHRONICLE** — smallest, cheapest. It's a threshold-watcher over data `api.py` already streams (`vitals_update`, `telemetry`). No LLM. Maybe 1-2 hours including frontend wiring.
+- **QUARTERMASTER** — small, mostly static data + one conditional. 1-2 hours. Lowest judge-value of the three — don't prioritize it over finishing the frontend connection.
+- **SCRIBE** — a Jinja2 template over the full pipeline's already-existing output, plus optionally one small LLM call for a summary paragraph. 2-3 hours, more if the "download a runbook" UX gets polished.
+
+**"One LLM in ATHENA — what's the plan for the whole system?"** See §5 below — this is the section that was actually researched this pass (previous version of this doc recommended Gemini Flash from memory; that turned out to be the wrong call once actually checked). SHERLOCK and ATHENA are the only two agents that call an LLM at all — everything else in this pipeline (SENTINEL, ORACLE, GUARDIAN, the simulator) is deterministic code with zero LLM involvement, which is worth remembering when explaining the architecture: it's not "8 LLM agents," it's 2 LLM calls in an otherwise fully deterministic pipeline.
+
+**If the goal is "get an MVP fully working," in order:**
+1. Wire the frontend↔backend connection (above) — without this, nothing else matters to a judge.
+2. Swap the LLM provider to Groq (§5) — cheap insurance against a live rate-limit, and free.
+3. Fix the flagship-fault timing bug (§2/§4.1) — the demo's headline scenario currently doesn't fire.
+4. CHRONICLE, then QUARTERMASTER, then SCRIBE, in that order, if hours remain.
+
+---
+
 ## 1. The MVP: 3 buttons, real data, two branching outcomes
 
 This is the whole demo. Get this rock-solid before touching anything else.
@@ -132,19 +156,26 @@ If a telemetry value on screen reads `1.24, 1.24, 1.24, 1.24` for ten ticks in a
 
 ---
 
-## 5. Which LLM to use — brainstormed, optimized for free + fast
+## 5. Which LLM to use — actually researched, not guessed (2026-09-05)
 
-SHERLOCK and ATHENA both currently call `anthropic/claude-sonnet-4-5` via OpenRouter. That's a paid model — worth knowing the free/cheap options given cost and rate-limit risk during a live demo, especially with two agents both making LLM calls in the same pipeline run.
+SHERLOCK and ATHENA both currently call `anthropic/claude-sonnet-4-5` via OpenRouter. Paid. An earlier version of this doc recommended Gemini Flash from memory without checking — that recommendation is now corrected below after actually searching current pricing/limits pages, because the memory-based guess turned out to be the weaker option.
 
-**What actually matters here, given how SHERLOCK/ATHENA are built:** both already have a 3-retry JSON-schema-validation loop with re-prompting on failure (see `backend/sherlock/agent.py` / `backend/athena/agent.py`). That retry loop is what makes swapping models low-risk — a model that occasionally messes up strict JSON still works fine, it just costs a retry. The two things that actually matter for the swap: (a) genuinely free or near-free, (b) fast enough that 2 sequential LLM calls (SHERLOCK then ATHENA) per triggered fault doesn't make the demo feel laggy.
+**What actually matters here, given how SHERLOCK/ATHENA are built:** both already have a 3-retry JSON-schema-validation loop with re-prompting on failure (see `backend/sherlock/agent.py` / `backend/athena/agent.py`). That's what makes swapping models low-risk — a model that occasionally messes up strict JSON still works, it just costs a retry. What actually matters for the swap: (a) genuinely free with a *stable* quota, (b) fast, since SHERLOCK then ATHENA is two sequential LLM calls per triggered fault and both sit in the critical path of a live demo.
 
-**Recommended primary: Google Gemini 2.0/2.5 Flash, via OpenRouter's free tier.**
-Zero code changes beyond the `model=` string — both agents already use OpenRouter's OpenAI-compatible client (`base_url="https://openrouter.ai/api/v1"`), and OpenRouter has offered free-tier Gemini Flash variants (check the current exact model ID at `https://openrouter.ai/models?max_price=0` right before you switch — these IDs and which ones are free shift over time, don't hardcode from memory). Gemini Flash is built for low-latency structured output and has historically been one of the more reliable free options for strict JSON schemas, which matters a lot given both agents demand exact schema compliance.
+**Recommended primary: Groq, hosting Llama 3.3 70B (or check `groq.com/pricing` for their current fastest large model — this shifts).**
+- **Free tier: 30 requests/min, 6,000 tokens/min, 14,400 requests/day, org-wide.** That's ~70x OpenRouter's free-model cap (below) and far more headroom than a hackathon demo needs even with heavy rehearsal.
+- **Genuinely the fastest inference available anywhere right now** — 300-1,000 tokens/sec on their custom LPU hardware, vs. typical GPU-hosted inference. This directly shortens the SHERLOCK→ATHENA latency the demo audience actually waits through.
+- **Fully OpenAI-SDK-compatible** — same `openai.OpenAI(...)` client SHERLOCK/ATHENA already use. The swap is exactly two lines per agent: `base_url="https://api.groq.com/openai/v1"` and the API key env var (`GROQ_API_KEY` instead of `OPENROUTER_API_KEY`), plus the model name string.
+- No credit card required for the free tier.
 
-**Recommended fallback if the free tier rate-limits mid-demo: Groq, hosting Llama 3.3 70B (or whatever their current fastest Llama/open model is).**
-Groq's own API (not OpenRouter) is inference-hardware-optimized for raw speed — routinely the fastest tokens/sec of any widely-available option, with a generous free tier well-suited to hackathon use. Requires a small code change: swap `base_url` to Groq's endpoint (`https://api.groq.com/openai/v1`) and the API key env var, same OpenAI-compatible client shape otherwise. Worth having this as a literal backup code path (an env var toggle between OpenRouter/Gemini and Groq/Llama) so a rate-limit mid-demo is a 5-second switch, not a panic.
+**Recommended fallback: OpenRouter's `openai/gpt-oss-120b:free`.**
+Explicitly built with native tool-calling and structured-output support — a real, deliberate fit for what SHERLOCK/ATHENA need, not a generic chat model pressed into service. Free tier is much tighter than Groq's (~20 requests/min, ~200/day, *shared across every free model on OpenRouter*, not per-model) — treat this as the break-glass option if Groq's org-wide limit gets hit mid-rehearsal, not the primary. Zero code change needed to reach it, since SHERLOCK/ATHENA already point at OpenRouter — just change the `model=` string.
 
-**Action item, not yet done:** actually implement the backup toggle (env-var-driven provider switch in `sherlock/agent.py` and `athena/agent.py`) and test both paths once, before relying on it live. A fallback you haven't tested is not a fallback.
+**Explicitly not recommended as primary: Gemini Flash (the previous guess in this doc).** Current search results turned up a live "Gemini has slashed free API limits" story and inconsistent numbers across sources (some say 250 requests/day, others 1,500) — Google appears to be actively tightening this tier. Fine as a third option, not what you want to build a live demo's critical path on.
+
+**Action item, not yet done:** implement an env-var-driven provider switch (`LLM_PROVIDER=groq|openrouter`) in `sherlock/agent.py` and `athena/agent.py` so a rate-limit mid-demo is a restart with one env var changed, not a panic. Test both paths once before relying on either live — an untested fallback isn't a fallback.
+
+Sources checked this pass: [Groq Free Tier 2026](https://www.grizzlypeaksoftware.com/articles/p/groq-api-free-tier-limits-in-2026-what-you-actually-get-uwysd6mb), [Groq API Pricing 2026](https://tokenmix.ai/blog/groq-api-pricing), [OpenRouter Free Models](https://openrouter.ai/collections/free-models), [Gemini free tier cuts](https://www.howtogeek.com/gemini-slashed-free-api-limits-what-to-use-instead/), [Free LLM APIs 2026 comparison](https://openrouter.ai/blog/tutorials/free-llm-apis-compared/).
 
 ---
 
