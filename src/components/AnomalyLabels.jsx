@@ -9,15 +9,10 @@ import './AnomalyLabels.css';
 // ANOMALY_FOCUS if the camera framing changes.
 const LABEL_SETS = {
   'TCS': {
-    // Moved onto the panel body itself (was sitting just outside its left
-    // edge, in open space) -- the panel is the widest, most reliable target
-    // in this locked pose even with the model's small settle/hover drift.
-    anchor: { x: 40, y: 62 },
-    // stack.y sits ~6% above anchor.y so the *middle* of the 3-chip block
-    // (translate(-50%,-100%) anchors its bottom edge, not center) lines up
-    // roughly level with the anchor -- a short, mostly-horizontal leader
-    // line to the left, not a long diagonal into open space.
-    stack: { x: 16, y: 56 },
+    // Right side of the TCS panel body — dot sits on the right half of
+    // the thermal panel, with labels stacked to the right.
+    anchor: { x: 56, y: 60 },
+    stack: { x: 72, y: 50 },
     labels: [
       { text: 'TCS', sub: 'Thermal Control' },
       { text: 'TEMP RISING', sub: '+4.2°C/hr' },
