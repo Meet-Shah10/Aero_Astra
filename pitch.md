@@ -52,7 +52,7 @@ An 8-agent pipeline: SENTINEL (anomaly detection) → SHERLOCK (causal root-caus
 
 **Three pillars, accurately stated:**
 
-1. **Zero Hallucination Architecture** — SHERLOCK's diagnosis is checked against an 18-edge physical causal graph before it's accepted; if the LLM (Gemini 2.5 Flash, via OpenRouter) proposes a root cause outside the physically valid candidate set, it's rejected and reprompted. Every safety decision (GUARDIAN) is deterministic code — no LLM call, no randomness, unit-tested — not "formally verified" in a mathematical sense, but fully auditable and reproducible.
+1. **Zero Hallucination Architecture** — SHERLOCK's diagnosis is checked against an 18-edge physical causal graph before it's accepted; if the LLM (Gemini 2.5 Flash, called directly via Google's Gemini API) proposes a root cause outside the physically valid candidate set, it's rejected and reprompted. Every safety decision (GUARDIAN) is deterministic code — no LLM call, no randomness, unit-tested — not "formally verified" in a mathematical sense, but fully auditable and reproducible.
 2. **Proactive Intelligence** — VITALS scores subsystem health every second, independent of whether SENTINEL has flagged anything, catching gradual degradation before it crosses a hard threshold.
 3. **Execution, Not Just Recommendation** — GUARDIAN doesn't just approve a plan, it executes it step-by-step against the digital twin, logging every step to SCRIBE's runbook.
 
@@ -90,7 +90,7 @@ We also pulled in **Mars Express thermal telemetry** (ESA Planetary Science Arch
 
 That's the honest version of where the data comes from: one real, open satellite's real anomaly history, real thermal telemetry from a second mission for calibration, and a physics model grounded in both — not a live feed from an operational constellation, because no such feed exists publicly, and we don't pretend otherwise anywhere in the product."
 
-**Tech stack** (verified, don't overstate): Python, FastAPI, OpenRouter (LLM gateway — Gemini 2.5 Flash), React + Three.js (3D frontend), XGBoost + scikit-learn (SENTINEL), ChromaDB (ATHENA's RAG retrieval).
+**Tech stack** (verified, don't overstate): Python, FastAPI, Google's genai SDK (Gemini 2.5 Flash, called directly — no LLM gateway in front of it), React + Three.js (3D frontend), XGBoost + scikit-learn (SENTINEL), ChromaDB (ATHENA's RAG retrieval).
 
 ---
 
@@ -204,13 +204,13 @@ Q&A bank — have these ready verbatim, judges ask these almost every time:
 A: Because it isn't public. No operator of a live constellation publishes fault history — proprietary, often a security concern. OPS-SAT is the one satellite that publishes real labeled anomaly data openly, so that's what we trained on, and we say so directly rather than implying access we didn't have.
 
 **Q: Which LLM, and why?**
-A: Gemini 2.5 Flash, via OpenRouter. It's used only where genuine language-level reasoning is needed — causal diagnosis narrative and procedure writing — never for anything that's actually a calculation. Safety scores come from Monte Carlo simulation, not the model.
+A: Gemini 2.5 Flash, called directly via Google's Gemini API. It's used only where genuine language-level reasoning is needed — causal diagnosis narrative and procedure writing — never for anything that's actually a calculation. Safety scores come from Monte Carlo simulation, not the model.
 
 **Q: What's novel vs. existing FDIR systems?**
 A: Traditional FDIR is rule-based lookup tables — no learning, no causal reasoning, no simulated comparison of fix options. We add a detector trained on real satellite data, physics-constrained causal diagnosis, Monte Carlo-validated recovery simulation, retrieval-grounded planning, and a graded human-authority gate. No existing open system combines all five.
 
 **Q: How would this scale to a constellation of 1,000 satellites?**
-A: SENTINEL and VITALS are stateless, sub-5ms per satellite — deploy as parallel workers. SHERLOCK/ATHENA are async LLM calls, load-balanced via OpenRouter. ORACLE's Monte Carlo runs are embarrassingly parallel across GPU nodes. The real bottleneck is LLM API rate limits, solved by priority queuing critical faults first.
+A: SENTINEL and VITALS are stateless, sub-5ms per satellite — deploy as parallel workers. SHERLOCK/ATHENA are async LLM calls direct to Gemini's API. ORACLE's Monte Carlo runs are embarrassingly parallel across GPU nodes. The real bottleneck is LLM API rate limits — worth being upfront about here, since our own free-tier key caps at 20 requests/day per model — solved at production scale by a paid tier plus priority queuing critical faults first.
 
 **Q: What if there's no internet or API access at the ground station?**
 A: The reasoning stages fall back to a precomputed offline response; detection, simulation, and the safety gate don't depend on a live API. You lose the natural-language explanation layer, not the actual fault handling.
