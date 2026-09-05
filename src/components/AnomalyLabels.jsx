@@ -9,12 +9,15 @@ import './AnomalyLabels.css';
 // ANOMALY_FOCUS if the camera framing changes.
 const LABEL_SETS = {
   'TCS': {
-    anchor: { x: 30, y: 58 },
+    // Moved onto the panel body itself (was sitting just outside its left
+    // edge, in open space) -- the panel is the widest, most reliable target
+    // in this locked pose even with the model's small settle/hover drift.
+    anchor: { x: 40, y: 62 },
     // stack.y sits ~6% above anchor.y so the *middle* of the 3-chip block
     // (translate(-50%,-100%) anchors its bottom edge, not center) lines up
     // roughly level with the anchor -- a short, mostly-horizontal leader
     // line to the left, not a long diagonal into open space.
-    stack: { x: 12, y: 52 },
+    stack: { x: 16, y: 56 },
     labels: [
       { text: 'TCS', sub: 'Thermal Control' },
       { text: 'TEMP RISING', sub: '+4.2°C/hr' },
@@ -22,8 +25,11 @@ const LABEL_SETS = {
     ],
   },
   'TT&C': {
-    anchor: { x: 54, y: 30 },
-    stack: { x: 80, y: 28 },
+    // Onto the dish body -- observed dish center varies ~13-49% in y across
+    // runs (settle drift), so this splits the difference rather than
+    // chasing either extreme.
+    anchor: { x: 46, y: 38 },
+    stack: { x: 78, y: 34 },
     labels: [
       { text: 'TT&C', sub: 'Comm Dish' },
       { text: 'SIGNAL LOSS', sub: '-114.7 dBm' },
@@ -31,8 +37,8 @@ const LABEL_SETS = {
     ],
   },
   'ADCS': {
-    anchor: { x: 54, y: 30 },
-    stack: { x: 80, y: 28 },
+    anchor: { x: 46, y: 38 },
+    stack: { x: 78, y: 34 },
     labels: [
       { text: 'ADCS', sub: 'Attitude Sensing' },
       { text: 'SENSOR DISAGREEMENT', sub: 'IRU vs. star tracker' },
