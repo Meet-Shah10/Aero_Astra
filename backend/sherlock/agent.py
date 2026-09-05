@@ -56,10 +56,12 @@ log = logging.getLogger(__name__)
 # Configuration
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Called directly against Google's Gemini API (google-genai SDK) — not
-# routed through OpenRouter. Model id is the native Gemini name (no
-# "google/" provider prefix, that was OpenRouter-routing syntax).
-# Env var: GEMINI_API_KEY
+# Routed through OpenRouter (OpenAI-compatible endpoint) -- base_url below
+# points there, so the model id needs the "google/" provider prefix and the
+# key needs to be an OpenRouter key (sk-or-v1-...), not a native Google
+# AI Studio key. A native GEMINI_API_KEY will 401 against OpenRouter.
+# Env var: OPENROUTER_API_KEY (GEMINI_API_KEY only works if it happens to
+# also be a valid OpenRouter key, which a native AIzaSy... key is not).
 DEFAULT_MODEL        = "google/gemini-2.5-flash"
 DEFAULT_TEMPERATURE  = 0.1   # Near-deterministic — safety-relevant agent
 DEFAULT_MAX_TOKENS   = 2048              # enough for full SherlockDiagnosis JSON
@@ -77,8 +79,10 @@ class SherlockAgent:
     Instantiate once and call .diagnose() for each anomaly event.
 
     Args:
-        api_key: Gemini API key. If None, reads GEMINI_API_KEY env var.
-        model: Native Gemini model id. Defaults to 'gemini-2.5-flash'.
+        api_key: OpenRouter API key. If None, reads OPENROUTER_API_KEY env var
+                 (falls back to GEMINI_API_KEY, but that only works if it's
+                 also a valid OpenRouter key).
+        model: OpenRouter model id. Defaults to 'google/gemini-2.5-flash'.
         temperature: LLM sampling temperature (0.0–1.0). Default 0.1.
         max_retries: Maximum LLM call attempts before raising SherlockDiagnosisError.
         candidate_depth: Predecessor search depth in the dependency graph.
@@ -98,8 +102,14 @@ class SherlockAgent:
         candidate_depth: int = DEFAULT_CANDIDATE_DEPTH,
         telemetry_provider: TelemetryProvider | None = None,
     ) -> None:
-        # Use GEMINI_API_KEY
-        resolved_key = api_key or os.environ.get("GEMINI_API_KEY")
+        # OPENROUTER_API_KEY first (matches base_url below); GEMINI_API_KEY
+        # as a fallback for anyone who's set that instead -- note this only
+        # actually authenticates if it happens to be an OpenRouter-issued key.
+        resolved_key = (
+            api_key
+            or os.environ.get("OPENROUTER_API_KEY")
+            or os.environ.get("GEMINI_API_KEY")
+        )
         if not resolved_key:
             raise EnvironmentError(
                 "API key not found. Set GEMINI_API_KEY in environment "
