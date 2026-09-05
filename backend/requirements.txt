@@ -19,6 +19,7 @@ tqdm
 # embedding endpoint, hit directly with GEMINI_API_KEY — not OpenRouter)
 google-genai
 openai
+httpx==0.27.2
 
 # SHERLOCK graph
 networkx
