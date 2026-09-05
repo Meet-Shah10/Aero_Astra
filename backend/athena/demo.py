@@ -15,7 +15,7 @@ Scenarios:
        (same as ORACLE demo Scenario C)
 
 Requirements:
-    OPENROUTER_API_KEY must be set in environment or a .env file at project root.
+    GEMINI_API_KEY must be set in environment or a .env file at project root.
 
 Run with:
     python -m backend.athena.demo
@@ -38,7 +38,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-# Load .env file if present (for OPENROUTER_API_KEY)
+# Load .env file if present (for GEMINI_API_KEY)
 try:
     from dotenv import load_dotenv
     load_dotenv(PROJECT_ROOT / ".env")
@@ -340,13 +340,13 @@ def main() -> None:
     print("  ATHENA — Recovery Planning Agent Demo | AERO-ASTRA")
     print(f"{'#' * 72}")
     print("\n  Full pipeline: Simulator → SENTINEL → SHERLOCK → ORACLE → ATHENA")
-    print("  Requires OPENROUTER_API_KEY in environment or .env file.\n")
+    print("  Requires GEMINI_API_KEY in environment or .env file.\n")
 
-    api_key = os.environ.get("OPENROUTER_API_KEY")
+    api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        print("ERROR: OPENROUTER_API_KEY not set.")
-        print("  Set it via: set OPENROUTER_API_KEY=sk-or-v1-...")
-        print("  Or create a .env file at project root: OPENROUTER_API_KEY=sk-or-v1-...")
+        print("ERROR: GEMINI_API_KEY not set.")
+        print("  Set it via: set GEMINI_API_KEY=AIzaSy...")
+        print("  Or create a .env file at project root: GEMINI_API_KEY=AIzaSy...")
         sys.exit(1)
 
     sherlock = SherlockAgent(api_key=api_key)

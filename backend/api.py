@@ -68,9 +68,9 @@ DEMO_FAULT_SCENARIOS = [
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Offline fallback content — used whenever the live OpenRouter call fails
-# (network, rate limit, or the account running out of credits: HTTP 402 is
-# the actual cause seen in testing, not a bad key or model name). Rather
+# Offline fallback content — used whenever the live Gemini API call fails
+# (network, rate limit — the free tier caps at 20 requests/day per model,
+# easy to exhaust across demo rehearsals — or a bad/missing key). Rather
 # than a generic "LLM offline" placeholder, each entry is a real diagnosis
 # grounded in this specific fault's physics as modeled in faults.py, with
 # the reasoning text filled in from the live telemetry at detection time —
@@ -484,7 +484,7 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
 
     # Lazy init with a graceful no-API-key fallback — lets the server start
     # and stream real telemetry/SENTINEL/VITALS even without
-    # OPENROUTER_API_KEY set, instead of crashing the whole background task.
+    # GEMINI_API_KEY set, instead of crashing the whole background task.
     # SHERLOCK/ATHENA-dependent messages fall back to a clearly-labeled stub
     # so the rest of the pipeline stays testable and demoable.
     try:

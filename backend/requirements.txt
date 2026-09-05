@@ -14,7 +14,10 @@ torch
 joblib
 tqdm
 
-# SHERLOCK / ATHENA (LLM agents)
+# SHERLOCK / ATHENA (LLM agents) — genai for direct Gemini calls (chat),
+# openai for ATHENA's RAG embeddings (Google AI Studio's OpenAI-compatible
+# embedding endpoint, hit directly with GEMINI_API_KEY — not OpenRouter)
+google-genai
 openai
 
 # SHERLOCK graph

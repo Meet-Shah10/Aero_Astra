@@ -4,9 +4,10 @@ AERO-ASTRA — ATHENA Recovery Planning Agent
 Agent 5 of AERO-ASTRA | Recovery Plan Synthesis
 
 Orchestrates the three-phase planning pipeline:
-  Phase 1 (LLM)         — ATHENA calls Claude (via OpenRouter) with SHERLOCK's
-                           diagnosis + ORACLE's validated rankings +
-                           RECOVERY_CATALOG descriptions. The LLM produces
+  Phase 1 (LLM)         — ATHENA calls Gemini (directly via Google's genai
+                           SDK) with SHERLOCK's diagnosis + ORACLE's
+                           validated rankings + RECOVERY_CATALOG
+                           descriptions. The LLM produces
                            reasoning_cot, overall_reasoning, and 2–3 options
                            using the AthenaLLMOption schema (no safety_score,
                            no blended_rank — Two-Schema Pattern).
@@ -50,7 +51,8 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
-from openai import OpenAI
+from google import genai
+from google.genai import types as genai_types
 
 from backend.oracle.schemas import OracleResponse
 from backend.sherlock.schemas import SherlockDiagnosis
@@ -78,19 +80,19 @@ log = logging.getLogger(__name__)
 # Configuration
 # ─────────────────────────────────────────────────────────────────────────────
 
-# OpenRouter — OpenAI-compatible endpoint that proxies to Gemini and other models
-# Env var: OPENROUTER_API_KEY
-DEFAULT_MODEL       = "google/gemini-2.5-flash"      # via OpenRouter
+# Called directly against Google's Gemini API (google-genai SDK) — not
+# routed through OpenRouter. Model id is the native Gemini name.
+# Env var: GEMINI_API_KEY
+DEFAULT_MODEL       = "gemini-2.5-flash"
 DEFAULT_TEMPERATURE = 0.15
 DEFAULT_MAX_RETRIES = 3
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 # 0.15: slightly above SHERLOCK's 0.1 — procedure prose benefits from natural
 # variation, but this is still safety-relevant; must stay below 0.2.
 DEFAULT_TEMPERATURE = 0.15
 
 # Longer than SHERLOCK: 3 options × ~5 steps + reasoning_cot + narratives
-DEFAULT_MAX_TOKENS  = 2048              # fits within OpenRouter free-tier credit balance
+DEFAULT_MAX_TOKENS  = 2048
 DEFAULT_MAX_RETRIES = 3
 
 # Valid operator effort strings (for schema validation)
@@ -109,8 +111,8 @@ class AthenaAgent:
     Instantiate once and call .plan() for each diagnosis+oracle pair.
 
     Args:
-        api_key:     OpenRouter API key. If None, reads OPENROUTER_API_KEY env var.
-        model:       OpenRouter model identifier.
+        api_key:     Gemini API key. If None, reads GEMINI_API_KEY env var.
+        model:       Native Gemini model id. Defaults to 'gemini-2.5-flash'.
         temperature: LLM sampling temperature (0.0–1.0). Default 0.15.
         max_retries: Maximum LLM call attempts before raising AthenaError.
     """
@@ -122,22 +124,15 @@ class AthenaAgent:
         temperature: float = DEFAULT_TEMPERATURE,
         max_retries: int = DEFAULT_MAX_RETRIES,
     ) -> None:
-        # Use OPENROUTER_API_KEY
-        resolved_key = (
-            api_key
-            or os.environ.get("OPENROUTER_API_KEY")
-            or os.environ.get("GEMINI_API_KEY")
-        )
+        # Use GEMINI_API_KEY
+        resolved_key = api_key or os.environ.get("GEMINI_API_KEY")
         if not resolved_key:
             raise EnvironmentError(
-                "API key not found. Set OPENROUTER_API_KEY in environment "
+                "API key not found. Set GEMINI_API_KEY in environment "
                 "or pass api_key= to AthenaAgent()."
             )
 
-        self._client = OpenAI(
-            base_url=OPENROUTER_BASE_URL,
-            api_key=resolved_key,
-        )
+        self._client = genai.Client(api_key=resolved_key)
         self._model       = model
         self._temperature = temperature
         self._max_retries = max_retries
@@ -164,7 +159,7 @@ class AthenaAgent:
             self._rag = None
 
         log.info(
-            "AthenaAgent initialised | model=%s | temp=%.2f | max_retries=%d | rag=%s | via OpenRouter",
+            "AthenaAgent initialised | model=%s | temp=%.2f | max_retries=%d | rag=%s | via Gemini API (direct)",
             model, temperature, max_retries, "enabled" if self._rag else "disabled",
         )
 
@@ -351,24 +346,30 @@ class AthenaAgent:
 
     def _call_llm(self, messages: list[dict[str, str]]) -> str:
         """
-        Make one call via OpenRouter (OpenAI-compatible API). Returns raw text.
+        Make one call directly against the Gemini API. Returns raw text.
 
-        System prompt is injected as the first message. Subsequent messages
-        carry the conversation history across retries so Claude sees exactly
-        what it returned previously — same pattern as SherlockAgent._call_llm.
+        System prompt is passed via system_instruction. Subsequent messages
+        carry the conversation history across retries so the model sees
+        exactly what it returned previously — same pattern as
+        SherlockAgent._call_llm ('assistant' maps to Gemini's 'model' role).
         """
-        full_messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            *messages,
+        contents = [
+            genai_types.Content(
+                role="model" if m["role"] == "assistant" else "user",
+                parts=[genai_types.Part(text=m["content"])],
+            )
+            for m in messages
         ]
-        response = self._client.chat.completions.create(
+        response = self._client.models.generate_content(
             model=self._model,
-            max_tokens=DEFAULT_MAX_TOKENS,
-            temperature=self._temperature,
-            messages=full_messages,
+            contents=contents,
+            config=genai_types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                temperature=self._temperature,
+                max_output_tokens=DEFAULT_MAX_TOKENS,
+            ),
         )
-        raw = response.choices[0].message.content or ""
-        raw = raw.strip()
+        raw = (response.text or "").strip()
         # Strip markdown code fences that Gemini often wraps JSON in
         if raw.startswith("```"):
             # Remove opening fence (```json or ```) and closing fence (```)

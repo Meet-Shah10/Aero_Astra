@@ -11,7 +11,7 @@ judgements, operator-effort estimates, and a blended recommendation.
 Usage:
     from backend.athena import AthenaAgent, AthenaError, RecoveryPlan
 
-    agent = AthenaAgent()   # reads OPENROUTER_API_KEY from env
+    agent = AthenaAgent()   # reads GEMINI_API_KEY from env
     plan = agent.plan(
         sherlock_diagnosis=diagnosis,   # SherlockDiagnosis from SHERLOCK
         oracle_response=oracle_resp,    # OracleResponse from run_oracle()
