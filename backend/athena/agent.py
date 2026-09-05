@@ -51,8 +51,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
-from google import genai
-from google.genai import types as genai_types
+from openai import OpenAI
 
 from backend.oracle.schemas import OracleResponse
 from backend.sherlock.schemas import SherlockDiagnosis
@@ -120,7 +119,7 @@ class AthenaAgent:
     def __init__(
         self,
         api_key: str | None = None,
-        model: str = DEFAULT_MODEL,
+        model: str = 'google/gemini-2.5-flash',
         temperature: float = DEFAULT_TEMPERATURE,
         max_retries: int = DEFAULT_MAX_RETRIES,
     ) -> None:
@@ -132,7 +131,7 @@ class AthenaAgent:
                 "or pass api_key= to AthenaAgent()."
             )
 
-        self._client = genai.Client(api_key=resolved_key)
+        self._client = OpenAI(api_key=resolved_key, base_url='https://openrouter.ai/api/v1')
         self._model       = model
         self._temperature = temperature
         self._max_retries = max_retries

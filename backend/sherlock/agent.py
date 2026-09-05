@@ -30,8 +30,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
-from google import genai
-from google.genai import types as genai_types
+from openai import OpenAI
 from pydantic import ValidationError
 
 from .graph import SatelliteGraph, DEFAULT_CANDIDATE_DEPTH
@@ -61,7 +60,7 @@ log = logging.getLogger(__name__)
 # routed through OpenRouter. Model id is the native Gemini name (no
 # "google/" provider prefix, that was OpenRouter-routing syntax).
 # Env var: GEMINI_API_KEY
-DEFAULT_MODEL        = "gemini-2.5-flash"
+DEFAULT_MODEL        = "google/gemini-2.5-flash"
 DEFAULT_TEMPERATURE  = 0.1   # Near-deterministic — safety-relevant agent
 DEFAULT_MAX_TOKENS   = 2048              # enough for full SherlockDiagnosis JSON
 DEFAULT_MAX_RETRIES  = 3
@@ -93,7 +92,7 @@ class SherlockAgent:
     def __init__(
         self,
         api_key: str | None = None,
-        model: str = DEFAULT_MODEL,
+        model: str = 'google/gemini-2.5-flash',
         temperature: float = DEFAULT_TEMPERATURE,
         max_retries: int = DEFAULT_MAX_RETRIES,
         candidate_depth: int = DEFAULT_CANDIDATE_DEPTH,
@@ -107,7 +106,7 @@ class SherlockAgent:
                 "or pass api_key= to SherlockAgent()."
             )
 
-        self._client = genai.Client(api_key=resolved_key)
+        self._client = OpenAI(api_key=resolved_key, base_url='https://openrouter.ai/api/v1')
         self._model = model
         self._temperature = temperature
         self._max_retries = max_retries
@@ -268,32 +267,14 @@ class SherlockAgent:
     # ── Private helpers ───────────────────────────────────────────────────────
 
     def _call_llm(self, messages: list[dict[str, str]]) -> str:
-        """
-        Make one call directly against the Gemini API. Returns raw text.
-
-        The system prompt is passed via system_instruction (Gemini's
-        equivalent of an OpenAI-style role='system' message). Subsequent
-        messages (user / assistant) carry the conversation history across
-        retries so the model sees exactly what it returned previously —
-        'assistant' maps to Gemini's 'model' role.
-        """
-        contents = [
-            genai_types.Content(
-                role="model" if m["role"] == "assistant" else "user",
-                parts=[genai_types.Part(text=m["content"])],
-            )
-            for m in messages
-        ]
-        response = self._client.models.generate_content(
+        api_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + messages
+        response = self._client.chat.completions.create(
             model=self._model,
-            contents=contents,
-            config=genai_types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                temperature=self._temperature,
-                max_output_tokens=DEFAULT_MAX_TOKENS,
-            ),
+            messages=api_messages,
+            temperature=self._temperature,
+            max_tokens=DEFAULT_MAX_TOKENS,
         )
-        raw = (response.text or "").strip()
+        raw = (response.choices[0].message.content or "").strip()
         log.debug("LLM raw response: %s", raw[:300])
         return raw
 
