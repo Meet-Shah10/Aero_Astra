@@ -44,33 +44,34 @@ The one hard architectural rule: **LLMs reason, they never compute a safety numb
 
 Two processes, both on one machine — no cloud infrastructure beyond the LLM API key.
 
-### 1. Backend
+### 1. Setup
 
 ```bash
+# Setup Python virtual environment
 python3 -m venv .venv
 source .venv/bin/activate          # .venv\Scripts\activate on Windows
 pip install -r backend/requirements.txt
-```
 
-Create `backend/.env`:
-```
-GEMINI_API_KEY=your-google-ai-studio-key
-```
-Get a key at [aistudio.google.com](https://aistudio.google.com/apikey). Note: the free tier caps at **20 requests/day per model** — each anomaly run costs at least 2 calls (SHERLOCK + ATHENA). Budget rehearsals accordingly, or upgrade to a paid tier before a live demo.
-
-Run from the repo root (module path matters — `backend.api`, not `api`):
-```bash
-uvicorn backend.api:app --host 0.0.0.0 --port 8000 --reload
-```
-
-### 2. Frontend
-
-```bash
+# Install Node dependencies
 npm install
+```
+
+Create a `.env` file in the project root containing your API key:
+```
+OPENROUTER_API_KEY=your-openrouter-key
+# OR if using Gemini directly:
+# GEMINI_API_KEY=your-gemini-key
+```
+
+### 2. Run the full stack
+
+```bash
 npm run dev
 ```
 
-Opens on `http://localhost:5173` (or the next free port) and connects to the backend's `ws://localhost:8000/ws`.
+This uses `concurrently` to automatically launch BOTH the Vite frontend (Port 5173) and the Uvicorn backend (Port 8000) simultaneously.
+
+Opens on `http://localhost:5173` and automatically connects to the backend's WebSocket.
 
 ### Verifying it's actually working
 
