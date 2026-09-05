@@ -7,7 +7,6 @@ Autonomous multi-agent AI system for satellite fault detection, diagnosis, and r
 
 Takes a satellite anomaly from detection to a physics-validated, human-approvable recovery plan in **under 10 seconds** (measured, not a target) — versus the 15-minute to 48-hour manual triage that's standard in real satellite operations today.
 
-See [`pitch.md`](pitch.md) for the full narrative (problem → what we tried first → why → what we built → results).
 
 ---
 
@@ -98,8 +97,6 @@ src/
   App.jsx             — main dashboard, WebSocket client, scenario injection
   components/         — 3D viewer, VITALS gauges, ORACLE panels, agent detail pages
 
-pitch.md              — judge-facing presentation script, slide-by-slide
-pptcontent.md         — fact-checked corrections/content for the PPT deck
 ```
 
 ---
@@ -108,4 +105,3 @@ pptcontent.md         — fact-checked corrections/content for the PPT deck
 
 No operational satellite publishes live fault telemetry — it's proprietary, often a security concern. The one real exception is **ESA's OPS-SAT** (launched 2019, an open experimentation platform) and its public **OPSSAT-AD** labeled anomaly dataset (Zenodo, DOI: 10.5281/zenodo.10624588), which SENTINEL's XGBoost engine is trained on. Mars Express thermal telemetry (ESA Planetary Science Archive) is used offline to calibrate the physics digital twin's thermal constants — not streamed live. Where neither dataset covers a fault type (thruster faults, power cascades), the physics twin fills the gap, calibrated against the real data available rather than invented from scratch.
 
-See `pitch.md` §3-4 for the full story of why this dataset choice, not a live feed, is what the system is actually built on.
