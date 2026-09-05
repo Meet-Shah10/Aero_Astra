@@ -708,7 +708,7 @@ function App() {
         alignItems: 'center',
         justifyContent: 'center',
       }}>
-        <Globe3D isRotating={!showDashboard} />
+        <Globe3D isRotating={true} />
       </div>
 
       {/* Satellite orbiting around the globe — only on landing page, separate overlay */}

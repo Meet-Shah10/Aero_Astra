@@ -10,7 +10,9 @@ import './AnomalyLabels.css';
 const LABEL_SETS = {
   'TCS': {
     anchor: { x: 30, y: 58 },
-    stack: { x: 14, y: 22 },
+    // Kept clear of .overlay-status ("ORACLE: DIGITAL TWIN LIVE"), which
+    // occupies roughly x:1.5-28%, y:3-10% of this box.
+    stack: { x: 24, y: 48 },
     labels: [
       { text: 'TCS', sub: 'Thermal Control' },
       { text: 'TEMP RISING', sub: '+4.2°C/hr' },
@@ -19,7 +21,7 @@ const LABEL_SETS = {
   },
   'TT&C': {
     anchor: { x: 54, y: 30 },
-    stack: { x: 70, y: 12 },
+    stack: { x: 76, y: 24 },
     labels: [
       { text: 'TT&C', sub: 'Comm Dish' },
       { text: 'SIGNAL LOSS', sub: '-114.7 dBm' },
@@ -28,7 +30,7 @@ const LABEL_SETS = {
   },
   'ADCS': {
     anchor: { x: 54, y: 30 },
-    stack: { x: 70, y: 12 },
+    stack: { x: 76, y: 24 },
     labels: [
       { text: 'ADCS', sub: 'Attitude Sensing' },
       { text: 'SENSOR DISAGREEMENT', sub: 'IRU vs. star tracker' },
@@ -37,7 +39,7 @@ const LABEL_SETS = {
   },
   'Propulsion': {
     anchor: { x: 50, y: 52 },
-    stack: { x: 66, y: 68 },
+    stack: { x: 68, y: 66 },
     labels: [
       { text: 'PROPULSION', sub: 'Thruster' },
       { text: 'VALVE MISFIRE', sub: 'Uncontrolled torque' },
@@ -46,7 +48,7 @@ const LABEL_SETS = {
   },
   'EPS': {
     anchor: { x: 40, y: 62 },
-    stack: { x: 20, y: 24 },
+    stack: { x: 24, y: 50 },
     labels: [
       { text: 'EPS', sub: 'Power Bus' },
       { text: 'LOAD CASCADE', sub: null },
