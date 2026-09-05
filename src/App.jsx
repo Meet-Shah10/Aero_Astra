@@ -643,7 +643,7 @@ function App() {
       // arrived this run — sherlock/oracle/athena may be null if the
       // pipeline was still mid-flight or backend was offline; the report
       // renders each section as "not available" rather than fabricating it.
-      setScribeReport({
+      const report = {
         generatedAt: new Date().toISOString(),
         scenario: scenario.label,
         faultId: scenario.faultId,
@@ -655,8 +655,52 @@ function App() {
         sherlock: backendDataRef.current?.sherlock,
         oracle: backendDataRef.current?.oracle,
         athena: backendDataRef.current?.athena,
-      });
+      };
+      setScribeReport(report);
+      downloadRunbook(report);
     }, 4000);
+  };
+
+  // Fires once, only when a run actually completes (not on every frame/log
+  // line) -- a prior version of this downloaded a .txt on every single run,
+  // which was removed per feedback as too noisy. This is the deliberate
+  // reintroduction: one real audit file per resolved incident.
+  const downloadRunbook = (report) => {
+    const section = (title, obj) => {
+      if (!obj) return `${title}\n  (not available -- pipeline stage did not complete this run)\n`;
+      const lines = Object.entries(obj)
+        .filter(([k]) => !['telemetry_window'].includes(k))
+        .map(([k, v]) => `  ${k}: ${Array.isArray(v) ? v.join(' -> ') : v}`)
+        .join('\n');
+      return `${title}\n${lines}\n`;
+    };
+    const text = [
+      'AERO-ASTRA -- AUDIT RUNBOOK',
+      '='.repeat(60),
+      `Generated: ${report.generatedAt}`,
+      `Scenario: ${report.scenario} (${report.faultId})`,
+      `Subsystem: ${report.subsystem}`,
+      `Severity: ${report.severity?.toFixed(2) ?? 'n/a'}`,
+      `GUARDIAN tier: ${report.guardianTier ?? 'n/a'}`,
+      `Mitigation option executed: #${report.mitigationOption}`,
+      '',
+      section('-- SENTINEL (detection) --', report.sentinel),
+      section('-- SHERLOCK (diagnosis) --', report.sherlock),
+      section('-- ORACLE (simulation) --', report.oracle),
+      section('-- ATHENA (recovery plan) --', report.athena),
+      '='.repeat(60),
+      'End of runbook.',
+    ].join('\n');
+
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `aero-astra-runbook-${report.faultId}-${Date.now()}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   };
 
   const isAnomaly = scenarioPhase !== 'nominal' && scenarioPhase !== 'resolved';

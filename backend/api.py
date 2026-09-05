@@ -776,17 +776,36 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
     # The 600-frame fault sim finishes in ~60 real-world seconds (0.1s/frame).
     # Without this loop the WS connection stays open but no new residual_update
     # or telemetry messages are sent, so the Sentinel residual chart goes blank.
-    # We regenerate short nominal batches and re-run the correlation detector
-    # to keep both charts alive until the next /trigger cancels this task.
+    #
+    # BUG FIXED HERE: this used to unconditionally call simulate_scenario(
+    # fault=None, ...) once the fault sim ran out — meaning any fault whose
+    # visible damage takes longer than ~60 real seconds to become obvious
+    # (e.g. adcs_sensor_fusion_failure, ramp_time_s=45, still climbing at
+    # t=600s) would have VITALS silently jump back to 100% healthy the
+    # moment a demo lingered on it — while GUARDIAN was still sitting in
+    # MANUAL_INTERLOCK, awaiting an approval that hadn't happened. The
+    # satellite has no business healing itself before a human (or GUARDIAN)
+    # actually acts. Now: if a fault is active, keep extending that same
+    # fault forward from where it left off instead of switching to nominal.
     #
     # timestamp_offset: keeps frame.timestamp monotonically increasing past
     # the end of the fault sim (600.0s), so the frontend residualHistory ring
     # buffer has consistent timestamps and the detectAtIndex anomaly-marker
     # lookup stays valid for the lifetime of the incident.
-    log.info("Simulation frames exhausted — entering continuous nominal keep-alive loop")
+    log.info("Simulation frames exhausted — entering continuous keep-alive loop (fault=%s)", fault_scenario)
     timestamp_offset = 600.0  # fault sim ran for 600 seconds
+    last_fault_state = sim.frames[-1].state if fault_scenario else None
     while True:
-        nom_batch = simulate_scenario(fault=None, duration=30.0, dt=1.0)
+        if fault_scenario is not None:
+            # Continue the same fault onward from its current (degraded) state
+            # rather than reverting to a fresh nominal run.
+            nom_batch = simulate_scenario(
+                fault=fault_scenario, duration=30.0, dt=1.0, fault_onset=0.0,
+                severity=severity, initial_state=last_fault_state,
+            )
+            last_fault_state = nom_batch.frames[-1].state
+        else:
+            nom_batch = simulate_scenario(fault=None, duration=30.0, dt=1.0)
         # Reset correlation detector EWMA once per batch so forecasts stay
         # sensible on fresh nominal data (no stale fault residuals leaking in).
         correlation_filter = ResidualCorrelationDetector()

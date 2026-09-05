@@ -10,9 +10,11 @@ import './AnomalyLabels.css';
 const LABEL_SETS = {
   'TCS': {
     anchor: { x: 30, y: 58 },
-    // Kept clear of .overlay-status ("ORACLE: DIGITAL TWIN LIVE"), which
-    // occupies roughly x:1.5-28%, y:3-10% of this box.
-    stack: { x: 24, y: 48 },
+    // stack.y sits ~6% above anchor.y so the *middle* of the 3-chip block
+    // (translate(-50%,-100%) anchors its bottom edge, not center) lines up
+    // roughly level with the anchor -- a short, mostly-horizontal leader
+    // line to the left, not a long diagonal into open space.
+    stack: { x: 12, y: 52 },
     labels: [
       { text: 'TCS', sub: 'Thermal Control' },
       { text: 'TEMP RISING', sub: '+4.2°C/hr' },
@@ -21,7 +23,7 @@ const LABEL_SETS = {
   },
   'TT&C': {
     anchor: { x: 54, y: 30 },
-    stack: { x: 76, y: 24 },
+    stack: { x: 80, y: 28 },
     labels: [
       { text: 'TT&C', sub: 'Comm Dish' },
       { text: 'SIGNAL LOSS', sub: '-114.7 dBm' },
@@ -30,7 +32,7 @@ const LABEL_SETS = {
   },
   'ADCS': {
     anchor: { x: 54, y: 30 },
-    stack: { x: 76, y: 24 },
+    stack: { x: 80, y: 28 },
     labels: [
       { text: 'ADCS', sub: 'Attitude Sensing' },
       { text: 'SENSOR DISAGREEMENT', sub: 'IRU vs. star tracker' },
