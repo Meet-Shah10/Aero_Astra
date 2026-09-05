@@ -97,13 +97,15 @@ _INITIAL_STATE = SatelliteState(
 # ─────────────────────────────────────────────────────────────────────────────
 # Revisit when ORACLE is calibrated against mission parameters.
 
-_MC_NOMINAL_SOC_MIN: float = 0.40
+_MC_NOMINAL_SOC_MIN: float = 0.50         # must be >50% to count as nominal
 _MC_NOMINAL_ATTITUDE_MAX: float = 15.0    # degrees
 _MC_NOMINAL_WATCHDOG_MAX: int = 2
+_MC_NOMINAL_PANEL_TEMP_MAX: float = 80.0  # °C — above this = thermal stress
 
 _MC_LOSS_SOC_MIN: float = 0.05
 _MC_LOSS_ATTITUDE_MAX: float = 90.0       # degrees — totally lost pointing
 _MC_LOSS_BER_MAX: float = 0.95            # near-total comms loss
+_MC_LOSS_PANEL_TEMP_MAX: float = 110.0   # °C — structural thermal damage threshold
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Internal: one simulation step
@@ -220,22 +222,36 @@ def _classify_outcome(state: SatelliteState) -> MonteCarloOutcome:
     """
     Classify the final state of a Monte Carlo run into one of three outcomes.
 
-    Thresholds are placeholder defaults — revisit when ORACLE is calibrated.
+    Mission loss conditions (any one is sufficient):
+      - Battery SOC below 5% (EPS total drain)
+      - Attitude error > 90° (total pointing loss)
+      - BER > 0.95 (near-total comms loss — mission-critical data loss)
+
+    Nominal recovery requires ALL of:
+      - Battery SOC >= 40%
+      - Attitude error <= 15°
+      - Watchdog trips <= 2
+      - BER <= 0.85 (link is at least marginally usable)
+
+    Anything else is degraded operation.
     """
-    # Mission loss: battery depleted OR total pointing loss AND comms lost
+    # Mission loss: any one critical failure is enough
     if state.eps.battery_soc < _MC_LOSS_SOC_MIN:
         return MonteCarloOutcome.MISSION_LOSS
-    if (
-        state.adcs.attitude_error > _MC_LOSS_ATTITUDE_MAX
-        and state.ttc.bit_error_rate > _MC_LOSS_BER_MAX
-    ):
+    if state.adcs.attitude_error > _MC_LOSS_ATTITUDE_MAX:
+        return MonteCarloOutcome.MISSION_LOSS
+    if state.ttc.bit_error_rate > _MC_LOSS_BER_MAX:   # comms blackout alone = mission loss
+        return MonteCarloOutcome.MISSION_LOSS
+    if state.tcs.panel_temp > _MC_LOSS_PANEL_TEMP_MAX:   # thermal damage threshold
         return MonteCarloOutcome.MISSION_LOSS
 
-    # Nominal recovery: battery healthy AND pointing acceptable AND watchdog stable
+    # Nominal recovery: ALL subsystems within healthy bounds
     if (
         state.eps.battery_soc >= _MC_NOMINAL_SOC_MIN
         and state.adcs.attitude_error <= _MC_NOMINAL_ATTITUDE_MAX
         and state.obc.watchdog_trips <= _MC_NOMINAL_WATCHDOG_MAX
+        and state.ttc.bit_error_rate <= 0.85   # at least marginal link health
+        and state.tcs.panel_temp <= _MC_NOMINAL_PANEL_TEMP_MAX  # thermal safe zone
     ):
         return MonteCarloOutcome.NOMINAL_RECOVERY
 

@@ -254,7 +254,7 @@ def step_tcs(
     eclipse_eq = _PANEL_ECLIPSE_EQUILIBRIUM
 
     target_temp = sun * sunlight_eq + (1.0 - sun) * eclipse_eq
-    target_temp += fault_mods.get("tcs_target_temp_delta", 0.0)
+    target_temp += fault_mods.get("tcs_target_temp_delta", 0.0) + recovery_mods.get("tcs_target_temp_delta", 0.0)
 
     # Cooling: heat pipe fault reduces effectiveness
     cooling_factor = fault_mods.get("tcs_cooling_factor", 1.0) * recovery_mods.get("tcs_cooling_factor", 1.0)
@@ -265,7 +265,8 @@ def step_tcs(
     panel_temp = state.tcs.panel_temp + dt * effective_time_const * (target_temp - state.tcs.panel_temp)
 
     # Propulsion heat addition (Propulsion→TCS thermal_output edge)
-    panel_temp += dt * fault_mods.get("prop_heat_output", 0.0)
+    prop_heat = fault_mods.get("prop_heat_output", 0.0) + recovery_mods.get("prop_heat_output", 0.0)
+    panel_temp += dt * max(0.0, prop_heat)
 
     panel_temp = _clamp(panel_temp, -50.0, 150.0)
 
@@ -480,12 +481,15 @@ def step_ttc(
         ttc_signal_delta    - dBm offset (negative = worse, from ttc_signal_dropout fault)
 
     Recovery modifiers consumed:
-        (none — signal is physically determined by attitude and fault state)
+        ttc_signal_delta    - dBm offset (positive = restores link, from reset_ttc_transmitter)
+        ttc_ber_reset       - if present and non-zero, snaps BER to nominal (0.01)
 
     attitude_error: from ADCS state — drives pointing loss
                     (ADCS→TT&C pointing edge: antenna de-points with attitude error).
     """
-    signal_delta = fault_mods.get("ttc_signal_delta", 0.0)
+    fault_signal_delta    = fault_mods.get("ttc_signal_delta", 0.0)
+    recovery_signal_delta = recovery_mods.get("ttc_signal_delta", 0.0)
+    signal_delta = fault_signal_delta + recovery_signal_delta
 
     # Signal: degrades with attitude error (ADCS→TT&C pointing edge)
     pointing_loss = _POINTING_LOSS_COEFF * attitude_error
@@ -497,6 +501,10 @@ def step_ttc(
     margin = new_signal - _LOCK_THRESHOLD_DBM
     bit_error_rate = _sigmoid(-_BER_SIGMOID_K * margin)
     bit_error_rate = _clamp(bit_error_rate, 0.0, 1.0)
+
+    # Recovery: hard-reset BER to nominal if transmitter was rebooted
+    if recovery_mods.get("ttc_ber_reset", 0.0):
+        bit_error_rate = 0.011  # nominal BER from _INITIAL_STATE
 
     # Ground contact: orbit clock determines window
     contact_remaining = orbit.ground_contact_remaining(t)

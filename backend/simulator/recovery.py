@@ -90,6 +90,24 @@ RECOVERY_CATALOG: dict[str, RecoveryAction] = {
             "Stops propellant leak and allows ADCS to regain control."
         ),
     ),
+    "reset_ttc_transmitter": RecoveryAction(
+        name="reset_ttc_transmitter",
+        target_subsystems=["TT&C"],
+        description=(
+            "Power-cycles the TT&C transmitter and re-initialises the comms stack. "
+            "Directly restores signal strength and BER after ttc_signal_dropout. "
+            "No effect on EPS or ADCS subsystems."
+        ),
+    ),
+    "reboot_obc": RecoveryAction(
+        name="reboot_obc",
+        target_subsystems=["OBC"],
+        description=(
+            "Soft-reboots the On-Board Computer: clears watchdog trips, flushes "
+            "memory leak, and resets CPU load to the cold-start baseline (~30%). "
+            "Primary counter for obc_memory_leak and obc_cpu_overload faults."
+        ),
+    ),
 }
 
 
@@ -130,7 +148,9 @@ def get_recovery_modifiers(action_name: str) -> dict[str, dict[str, float]]:
         mods["obc"]["obc_cpu_cap"] = 0.20          # cap CPU at 20%
         mods["obc"]["obc_memory_fix"] = 1.0        # stop memory leak
         mods["obc"]["obc_cpu_delta"] = -0.1        # reduce active process load
-        mods["eps"]["eps_load_delta"] = -0.8       # safe mode reduces total load
+        mods["eps"]["eps_load_delta"] = -40.0      # huge load reduction
+        mods["tcs"]["tcs_target_temp_delta"] = -350.0 # cancels thermal runaway heating
+        mods["adcs"]["adcs_safe_mode"] = 1.0       # forces attitude to 0 (sun-pointing)
 
     elif action_name == "activate_backup_heater":
         mods["tcs"]["tcs_heater_override"] = 1.0  # force heater on
@@ -139,5 +159,16 @@ def get_recovery_modifiers(action_name: str) -> dict[str, dict[str, float]]:
         mods["prop"]["prop_burn_rate"] = -999.0    # cancels all burn rate (engine clamps to 0)
         mods["prop"]["prop_heat_input"] = -999.0   # cancels thruster heat
         mods["adcs"]["adcs_disturbance_torque"] = -999.0  # clears disturbance (engine clamps to 0)
+        mods["tcs"]["prop_heat_output"] = -999.0   # stops heat cascading to panel
+
+    elif action_name == "reset_ttc_transmitter":
+        mods["ttc"]["ttc_signal_delta"] = 40.0     # restores signal (+40 dBm cancels -40 dropout)
+        mods["ttc"]["ttc_ber_reset"] = 1.0         # flag to reset BER to nominal in step_ttc
+
+    elif action_name == "reboot_obc":
+        mods["obc"]["obc_cpu_cap"] = 0.30          # reset CPU to cold-start baseline
+        mods["obc"]["obc_memory_fix"] = 1.0        # flush memory leak
+        mods["obc"]["obc_watchdog_reset"] = 1.0    # clear watchdog trip counter
+        mods["obc"]["obc_cpu_delta"] = -0.15       # reduce active process overhead
 
     return mods
