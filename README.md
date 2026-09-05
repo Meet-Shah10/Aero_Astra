@@ -2,9 +2,12 @@
 
 Autonomous multi-agent AI system for satellite fault detection, diagnosis, and recovery. Built for Smart Horizon 2026 (Team Serenitians, SH-DST-01).
 
+**🏆 Hackathon Submission Details**
+- **Presentation Deck (PPT) & Video Demo:** [Available on Google Drive](https://drive.google.com/drive/u/1/folders/12AR5bKhr_ckBZtmSmssf3yawUtxbmPjN)
+
 Takes a satellite anomaly from detection to a physics-validated, human-approvable recovery plan in **under 10 seconds** (measured, not a target) — versus the 15-minute to 48-hour manual triage that's standard in real satellite operations today.
 
-See [`pitch.md`](pitch.md) for the full narrative (problem → what we tried first → why → what we built → results) and [`pptcontent.md`](pptcontent.md) for verified slide-by-slide deck content.
+See [`pitch.md`](pitch.md) for the full narrative (problem → what we tried first → why → what we built → results).
 
 ---
 
