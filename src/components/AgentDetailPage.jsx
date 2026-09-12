@@ -150,11 +150,11 @@ function SentinelPage({ activeScenario, activeSeverity, isAnomaly, hasIncidentDa
           ? <>Correlation threshold exceeded on <strong>{activeScenario.subsystem}</strong>. Physics digital-twin baseline vs. current live snapshot — changed fields highlighted.</>
           : 'All telemetry within baseline range. Snapshots below are identical — no anomaly currently flagged.'}
       </p>
-      {liveTm && (
+      {liveTm && liveTm.subsystems && (
         <div className="live-data-badge" style={{ marginBottom: 12 }}>
-          ● LIVE — backend/api.py 'telemetry' @ t={liveTm.timestamp}s — ADCS.attitude_error={liveTm.subsystems.ADCS.attitude_error.toFixed(3)}°,
-          ADCS.wheel={liveTm.subsystems.ADCS.reaction_wheel_speed.toFixed(1)}rpm, EPS.soc={(liveTm.subsystems.EPS.battery_soc * 100).toFixed(1)}%,
-          EPS.bus_voltage={liveTm.subsystems.EPS.bus_voltage.toFixed(2)}V
+          ● LIVE — backend/api.py 'telemetry' @ t={liveTm.timestamp}s — ADCS.attitude_error={liveTm.subsystems.ADCS?.attitude_error?.toFixed(3) ?? '0.000'}°,
+          ADCS.wheel={liveTm.subsystems.ADCS?.reaction_wheel_speed?.toFixed(1) ?? '0.0'}rpm, EPS.soc={((liveTm.subsystems.EPS?.battery_soc ?? 0) * 100).toFixed(1)}%,
+          EPS.bus_voltage={liveTm.subsystems.EPS?.bus_voltage?.toFixed(2) ?? '0.00'}V
         </div>
       )}
       {backendOnline && (
@@ -528,12 +528,35 @@ function ScribePage({ isAnomaly, scenarioPhase, guardianTier, guardianApproved, 
   );
 }
 
-function ChroniclePage({ logs }) {
+function ChroniclePage({ logs, backendOnline, backendData }) {
+  const liveTm = backendOnline ? backendData?.telemetry : null;
   return (
-    <div className="chronicle-full-log">
-      {logs.map((log, i) => (
-        <p key={i} className={log.includes('WARN') || log.includes('⚠') ? 'text-red' : ''}>{log}</p>
-      ))}
+    <div className="chronicle-full-log" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ flex: 1, overflowY: 'auto' }}>
+        {logs.map((log, i) => (
+          <p key={i} className={log.includes('WARN') || log.includes('⚠') ? 'text-red' : ''}>{log}</p>
+        ))}
+      </div>
+      {liveTm && (
+        <div style={{ marginTop: 'auto', paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+          <div style={{ fontSize: 10, letterSpacing: '0.1em', color: 'rgba(255,255,255,0.55)', textTransform: 'uppercase', marginBottom: 6 }}>
+            RAW TELEMETRY STREAM (backend/api.py)
+          </div>
+          <pre style={{
+            background: 'rgba(0,0,0,0.5)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            padding: 12,
+            borderRadius: 4,
+            fontSize: 10,
+            color: '#00FF88',
+            overflowX: 'auto',
+            maxHeight: 200,
+            overflowY: 'auto'
+          }}>
+            {JSON.stringify(liveTm, null, 2)}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }

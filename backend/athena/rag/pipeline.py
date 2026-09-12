@@ -77,8 +77,20 @@ COLLECTION_NAME   = "nasa_hdbk_1002"
 CHUNK_SIZE        = 1000    # characters
 CHUNK_OVERLAP     = 200     # characters shared between adjacent chunks
 TOP_K             = 4        # passages to retrieve per query
-EMBED_MODEL       = "models/gemini-embedding-001"  # Google AI Studio OpenAI-compat ID
-GEMINI_EMBED_URL  = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+# ── Embedding backend (offline-first) ────────────────────────────────────────
+# Priority:
+#   1. Ollama nomic-embed-text (local, no API key — always tried first)
+#   2. Gemini embedding via Google AI Studio (cloud, GEMINI_API_KEY required)
+# The active embed_model is recorded in the build manifest so a backend switch
+# forces a rebuild automatically.
+OLLAMA_EMBED_MODEL  = "nomic-embed-text"          # must be pulled: ollama pull nomic-embed-text
+OLLAMA_EMBED_URL    = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")  # raw Ollama base
+GEMINI_EMBED_MODEL  = "models/gemini-embedding-001"
+GEMINI_EMBED_URL    = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+# EMBED_MODEL is what gets written to the manifest — set by the active embedder
+EMBED_MODEL = OLLAMA_EMBED_MODEL  # default; overridden if Ollama is unavailable
 
 
 # Separators for RecursiveCharacterTextSplitter, in priority order:
@@ -250,26 +262,93 @@ def _manifest_matches_current_config(manifest: dict) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Embedding via OpenRouter
+# Embedding backends — OllamaEmbedder (offline-first) / GeminiEmbedder (cloud)
 # ─────────────────────────────────────────────────────────────────────────────
+
+import urllib.request
+import json as _json
+
+
+class OllamaEmbedder:
+    """
+    Embed text using the local Ollama server's embedding endpoint.
+    Uses nomic-embed-text by default — a 137 M parameter model that runs
+    fully offline on CPU/GPU with no API key required.
+
+    Requires: ollama pull nomic-embed-text
+    """
+
+    def __init__(
+        self,
+        model: str = OLLAMA_EMBED_MODEL,
+        base_url: str = OLLAMA_EMBED_URL,
+    ):
+        # Trim any trailing /v1 so we can call the native Ollama REST endpoint
+        self.base_url = base_url.rstrip("/").removesuffix("/v1")
+        self.model = model
+        self._embed_url = f"{self.base_url}/api/embeddings"
+        # Sanity probe — raises ConnectionError if Ollama is not running
+        self._probe()
+        log.info("OllamaEmbedder ready | model=%s | url=%s", model, self.base_url)
+
+    def _probe(self) -> None:
+        """Quick liveness check — raises if Ollama server is not reachable."""
+        try:
+            req = urllib.request.Request(
+                f"{self.base_url}/api/tags",
+                method="GET",
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                body = _json.loads(resp.read())
+            models = [m["name"] for m in body.get("models", [])]
+            if self.model not in models and f"{self.model}:latest" not in models:
+                raise EnvironmentError(
+                    f"Ollama model '{self.model}' not found. "
+                    f"Run: ollama pull {self.model}"
+                )
+        except urllib.error.URLError as exc:
+            raise ConnectionError(
+                f"Ollama server not reachable at {self.base_url}. "
+                "Start it with: ollama serve"
+            ) from exc
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        """
+        Embed a list of strings via the Ollama /api/embeddings endpoint.
+        Calls one at a time (Ollama batching is not stable across all models).
+        """
+        all_embeddings: list[list[float]] = []
+        for i, text in enumerate(texts):
+            payload = _json.dumps({"model": self.model, "prompt": text}).encode()
+            req = urllib.request.Request(
+                self._embed_url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                body = _json.loads(resp.read())
+            all_embeddings.append(body["embedding"])
+            if (i + 1) % 10 == 0:
+                log.debug("Embedded %d/%d texts …", i + 1, len(texts))
+        return all_embeddings
+
 
 class GeminiEmbedder:
     """
-    Thin wrapper around Google AI Studio's embedding endpoint using the
-    openai-compatible Python client. Uses text-embedding-004 by default.
-    Falls back to OPENROUTER_API_KEY for backwards compatibility.
+    Cloud fallback: embed via Google AI Studio using the OpenAI-compatible
+    endpoint. Requires GEMINI_API_KEY (or OPENROUTER_API_KEY) in environment.
+    Only used when Ollama is unavailable.
     """
 
-    def __init__(self, model: str = EMBED_MODEL):
-        # GEMINI_API_KEY preferred; fall back to OPENROUTER_API_KEY for compat
+    def __init__(self, model: str = GEMINI_EMBED_MODEL):
         api_key = (
             os.environ.get("GEMINI_API_KEY")
             or os.environ.get("OPENROUTER_API_KEY")
         )
         if not api_key:
             raise EnvironmentError(
-                "API key not found. Set GEMINI_API_KEY (Google AI Studio) "
-                "or OPENROUTER_API_KEY in environment."
+                "API key not found. Set GEMINI_API_KEY (or OPENROUTER_API_KEY) in environment."
             )
         from openai import OpenAI
         self._client = OpenAI(
@@ -278,7 +357,6 @@ class GeminiEmbedder:
         )
         self.model = model
         log.info("GeminiEmbedder ready | model=%s", model)
-
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         """
@@ -293,6 +371,29 @@ class GeminiEmbedder:
             resp = self._client.embeddings.create(model=self.model, input=batch)
             all_embeddings.extend([item.embedding for item in resp.data])
         return all_embeddings
+
+
+def build_embedder() -> OllamaEmbedder | GeminiEmbedder:
+    """
+    Return an OllamaEmbedder if Ollama is running and nomic-embed-text is
+    available; otherwise fall back to GeminiEmbedder.
+
+    Also updates the module-level EMBED_MODEL so the build manifest records
+    the actual embedder used.
+    """
+    global EMBED_MODEL
+    try:
+        embedder = OllamaEmbedder()
+        EMBED_MODEL = embedder.model
+        return embedder
+    except (ConnectionError, EnvironmentError, OSError) as exc:
+        log.warning(
+            "Ollama embedder unavailable (%s) — falling back to Gemini cloud embedding.", exc
+        )
+    # Gemini cloud fallback
+    embedder = GeminiEmbedder()
+    EMBED_MODEL = embedder.model
+    return embedder
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -334,7 +435,7 @@ class AthenaRAGPipeline:
         self._chroma_client = chromadb.PersistentClient(path=str(vectorstore_dir))
         self._collection_name = collection_name
         self._collection: chromadb.Collection | None = None
-        self._embedder: GeminiEmbedder | None = None
+        self._embedder: OllamaEmbedder | GeminiEmbedder | None = None
 
         # Try to connect to an already-built collection (no API key needed for reads
         # if we store embeddings — ChromaDB handles similarity search locally)
@@ -352,10 +453,10 @@ class AthenaRAGPipeline:
                 collection_name,
             )
 
-    def _get_embedder(self) -> GeminiEmbedder:
-        """Lazy-initialise the embedder — never created until first embed call."""
+    def _get_embedder(self) -> OllamaEmbedder | GeminiEmbedder:
+        """Lazy-initialise the embedder — tries Ollama first, falls back to Gemini."""
         if self._embedder is None:
-            self._embedder = GeminiEmbedder()
+            self._embedder = build_embedder()
         return self._embedder
 
     def is_ready(self) -> bool:

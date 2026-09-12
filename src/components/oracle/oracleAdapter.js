@@ -54,56 +54,75 @@ const TICK_MS = 80; // ms between run ticks in the animation
 // ─── Map one backend result entry → UI action shape ──────────────────────────
 function mapBackendResult(r, rank, totalActions) {
   const n = RUNS_PER_ACTION;
-  const nominalCount    = Math.round(r.nominal_recovery_rate * n);
-  const missionLossCount = Math.round(r.mission_loss_rate * n);
-  const degradedCount   = Math.max(0, n - nominalCount - missionLossCount);
+
+  // Derive successProbability from safety_score (range ~[-0.45, +0.55] → [0,1]).
+  // This is the single source of truth for the distribution — using raw
+  // nominal_recovery_rate would always show 100/0/0 because the binary MC
+  // outcome classifier is saturated (SOC never drops below the 5% loss floor).
+  // Normalise safety_score to [0,1] success probability.
+  // Range: SCORE_MIN=-0.43 (conflicting action, full penalties) to SCORE_MAX=0.65 (perfect affinity+SOC).
+  // Formula: (score - SCORE_MIN) / (SCORE_MAX - SCORE_MIN)
+  const SCORE_MIN = -0.43;
+  const SCORE_MAX =  0.65;
+  const successProb     = Math.min(1, Math.max(0, (r.safety_score - SCORE_MIN) / (SCORE_MAX - SCORE_MIN)));
+
+  // mission_loss_rate comes from real MC runs — respect it directly.
+  const missionLossProb = Math.min(r.mission_loss_rate, 1 - successProb);
+
+  // Degraded = whatever is left after nominal success and mission loss.
+  const degradedProb    = Math.max(0, 1 - successProb - missionLossProb);
+
+  const nominalCount     = Math.round(successProb     * n);
+  const missionLossCount = Math.round(missionLossProb * n);
+  const degradedCount    = Math.max(0, n - nominalCount - missionLossCount);
 
   const meanSocPct = r.mean_final_battery_soc != null
     ? parseFloat((r.mean_final_battery_soc * 100).toFixed(1))
-    : parseFloat((15 + r.nominal_recovery_rate * 65).toFixed(1));
+    : parseFloat((15 + successProb * 65).toFixed(1));
 
   const stdSocPct  = r.std_final_battery_soc != null
     ? parseFloat((r.std_final_battery_soc * 100).toFixed(1))
     : parseFloat((2 + r.mission_loss_rate * 12).toFixed(1));
 
-  const meanTTR = parseFloat((10 + (1 - Math.min(r.safety_score, 1)) * 40).toFixed(1));
+  const meanTTR = parseFloat((10 + (1 - successProb) * 40).toFixed(1));
   const p90TTR  = parseFloat((meanTTR * 1.55).toFixed(1));
 
   const summary = {
     actionName:               r.action_name,
     safetyScore:              r.safety_score,
-    successProbability:       r.nominal_recovery_rate,
+    successProbability:       successProb,
     meanFinalSoc:             meanSocPct,
     stdFinalSoc:              stdSocPct,
     meanTimeToRecoveryMin:    meanTTR,
     p90TimeToRecoveryMin:     p90TTR,
-    missionLossProbability:   r.mission_loss_rate,
+    missionLossProbability:   missionLossProb,
     whyItWon: {
       decidingLevel: 'primary',
       explanation:
         `Safety Score: ${r.safety_score.toFixed(3)}. ` +
-        `Nominal recovery rate: ${Math.round(r.nominal_recovery_rate * 100)}%. ` +
-        `Mission-loss risk: ${Math.round(r.mission_loss_rate * 100)}% across ${RUNS_PER_ACTION} Monte Carlo runs.`,
+        `Success probability: ${Math.round(successProb * 100)}% ` +
+        `(${nominalCount}/${n} nominal, ${degradedCount}/${n} degraded, ${missionLossCount}/${n} mission-loss).`,
     },
   };
 
   const distribution = {
-    nominal: nominalCount,
-    degraded: degradedCount,
+    nominal:     nominalCount,
+    degraded:    degradedCount,
     missionLoss: missionLossCount,
-    totalRuns: n
+    totalRuns:   n,
   };
+
 
   const trajectory = generateDynamicSocTrajectory(meanSocPct, stdSocPct);
 
   return {
     actionName:          r.action_name,
     safetyScore:         r.safety_score,
-    successProbability:  r.nominal_recovery_rate,
-    missionLossRate:     r.mission_loss_rate,
-    stdFinalBatterySoc:  r.std_final_battery_soc ?? parseFloat((0.02 + r.mission_loss_rate * 0.4).toFixed(4)),
-    nominalRecoveryRate: r.nominal_recovery_rate,
-    degradedRate:        degradedCount / n,
+    successProbability:  successProb,
+    missionLossRate:     missionLossProb,
+    stdFinalBatterySoc:  r.std_final_battery_soc ?? parseFloat((0.02 + missionLossProb * 0.4).toFixed(4)),
+    nominalRecoveryRate: r.nominal_recovery_rate,   // raw MC value, kept for reference
+    degradedRate:        degradedProb,
     missionLossCount,
     nominalCount,
     degradedCount,
@@ -112,6 +131,7 @@ function mapBackendResult(r, rank, totalActions) {
     distribution,
     trajectory
   };
+
 }
 
 // ─── Build winnerSummary from real backend data ───────────────────────────────

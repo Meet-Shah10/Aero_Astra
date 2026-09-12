@@ -62,7 +62,7 @@ def _evaluate_action(action_name: str, request: OracleRequest) -> ActionResult:
         fault_severity=request.fault_severity,
     )
 
-    score = compute_safety_score(mc_result)
+    score = compute_safety_score(mc_result, fault_name=request.fault_name, action_name=action_name)
     flags = compute_flags(mc_result)
 
     return ActionResult(

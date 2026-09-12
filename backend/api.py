@@ -35,6 +35,7 @@ from backend.sherlock.schemas import AnomalyEvent, TelemetrySnapshot, UrgencyLev
 from backend.sherlock.telemetry_interface import TelemetryProvider
 from backend.oracle.agent import run_oracle
 from backend.oracle.schemas import OracleRequest
+from backend.oracle.scoring import safety_score_to_probability
 from backend.athena.agent import AthenaAgent
 from backend.vitals.agent import calculate_vitals
 from fastapi.middleware.cors import CORSMiddleware
@@ -315,22 +316,29 @@ def build_fallback_options(oracle_response) -> list[dict]:
     Real ranked options for the frontend's ATHENA display when the LLM call
     is unavailable — every number here comes straight from ORACLE's actual
     Monte Carlo results, not a placeholder. Top 2 by safety_score.
+
+    successProbability is derived from safety_score normalised to [0,1]:
+        (safety_score + 0.45) / 1.0  — calibrated to the multi-factor formula
+        whose range is approximately [-0.45, +0.55].
     """
     options = []
     for r in oracle_response.results[:2]:
+        # Normalise safety_score → [0, 1] success probability
+        success_prob = safety_score_to_probability(r.safety_score)
         options.append({
             "action_name": r.action_name,
             "procedure_steps": ACTION_PROCEDURE_STEPS.get(r.action_name, [f"Execute {r.action_name}"]),
             "safety_score": r.safety_score,
-            "effectiveness_score": r.mc_result.nominal_recovery_rate,
+            "effectiveness_score": round(success_prob, 4),
             "is_irreversible": r.action_name in ("thruster_isolation",),
             "predicted_outcome": (
-                f"{r.mc_result.nominal_recovery_rate*100:.0f}% nominal recovery, "
+                f"{success_prob*100:.0f}% estimated success probability (safety_score={r.safety_score:.3f}), "
                 f"{r.mc_result.mission_loss_rate*100:.0f}% mission-loss risk across "
                 f"{r.mc_result.n_runs} simulated runs."
             ),
         })
     return options
+
 
 
 app = FastAPI(title="AERO-ASTRA Streaming Bridge")
@@ -343,11 +351,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-class FaultTriggerRequest(BaseModel):
-    fault_name: str | None = None
-    severity: float = 0.7
-
 current_stream_task = None
+
+# Path to the pre-generated replay playlist
+_PLAYLIST_PATH = Path(__file__).resolve().parent / "replay" / "playlist.json"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. SimulatorTelemetryProvider
@@ -439,54 +446,87 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. Streaming Loop / Mock Live Stream
+# 3. Autonomous Replay Streaming
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def simulate_stream(fault_scenario: str | None = None, severity: float = 0.7):
-    """
-    Generates telemetry frames and evaluates them via Sentinel, Sherlock, Oracle, Guardian.
-    """
-    log.info("Starting Streaming Bridge...")
-    
-    # 1. Generate nominal data for baseline
-    nom_result = simulate_scenario(fault=None, duration=60.0, dt=1.0)
-    nom_data = {
-        'CADC0872': [f.state.adcs.attitude_error for f in nom_result.frames],
-        'CADC0873': [f.state.adcs.reaction_wheel_speed for f in nom_result.frames],
-        'CADC0874': [f.state.eps.load_current for f in nom_result.frames],
-    }
-    def compute_mad(series):
-        dx = np.abs(np.diff(series))
-        return np.median(np.abs(dx - np.median(dx))) if len(dx) > 0 else 0.0
-        
-    static_mad_dict = {
-        'CADC0872': max(compute_mad(nom_data['CADC0872']), 1e-6),
-        'CADC0873': max(compute_mad(nom_data['CADC0873']), 1e-6),
-        'CADC0874': max(compute_mad(nom_data['CADC0874']), 1e-6),
-    }
 
-    # Generate scenario with fault. duration=600s matches the window VITALS'
-    # thresholds were calibrated against (see vitals/agent.py docstring) —
-    # this was previously 60s, which meant tcs_thermal_runaway (crosses the
-    # alert threshold at ~step 84) was the only fault fast enough to ever
-    # fire; eps_battery_degradation and adcs_reaction_wheel_degradation
-    # never got there and the pipeline looked permanently stuck on SENTINEL.
-    sim = simulate_scenario(fault=fault_scenario, duration=600.0, dt=1.0, fault_onset=2.0, severity=severity)
-    
-    persistence = SentinelPersistenceFilter(threshold=0.60, min_consecutive_steps=35)
-    # KNOWN ISSUE, NOT resolved — measured directly (see roadmap.md §2): this
-    # debounce reduces the raw false-alarm count but post-fault detection is
-    # still statistically close to the nominal false-positive rate. Do not
-    # remove this comment until someone re-measures and it's actually fixed.
-    physics_filter = PhysicsSpikeFilter(window_size=10, min_spikes_required=2)
-    correlation_filter = ResidualCorrelationDetector()
-    window = []
+def _dict_to_state(s: dict) -> SatelliteState:
+    """
+    Reconstruct a SatelliteState from the serialised frame dict
+    produced by backend/replay/generate.py.
+    """
+    from backend.simulator.schemas import (
+        ADCSState, EPSState, OBCState, PropulsionState, TCSState, TTCState,
+    )
+    return SatelliteState(
+        timestamp=0.0,
+        eps=EPSState(
+            battery_soc=s["eps"]["battery_soc"],
+            solar_array_current=s["eps"]["solar_array_current"],
+            bus_voltage=s["eps"]["bus_voltage"],
+            load_current=s["eps"]["load_current"],
+        ),
+        tcs=TCSState(
+            panel_temp=s["tcs"]["panel_temp"],
+            battery_temp=s["tcs"]["battery_temp"],
+            heater_active=bool(s["tcs"]["heater_active"]),
+            in_eclipse=bool(s["tcs"]["in_eclipse"]),
+        ),
+        adcs=ADCSState(
+            attitude_error=s["adcs"]["attitude_error"],
+            reaction_wheel_speed=s["adcs"]["reaction_wheel_speed"],
+        ),
+        obc=OBCState(
+            free_memory_mb=s["obc"]["free_memory_mb"],
+            cpu_load=s["obc"]["cpu_load"],
+            watchdog_trips=int(s["obc"]["watchdog_trips"]),
+        ),
+        ttc=TTCState(
+            signal_strength=s["ttc"]["signal_strength"],
+            bit_error_rate=s["ttc"]["bit_error_rate"],
+            ground_contact_remaining=s["ttc"]["ground_contact_remaining"],
+        ),
+        propulsion=PropulsionState(
+            fuel_remaining=s["propulsion"]["fuel_remaining"],
+            thruster_temp=s["propulsion"]["thruster_temp"],
+        ),
+        active_fault=s.get("active_fault"),
+        fault_severity=s.get("fault_severity", 0.0),
+    )
 
-    # Lazy init with a graceful no-API-key fallback — lets the server start
-    # and stream real telemetry/SENTINEL/VITALS even without
-    # GEMINI_API_KEY set, instead of crashing the whole background task.
-    # SHERLOCK/ATHENA-dependent messages fall back to a clearly-labeled stub
-    # so the rest of the pipeline stays testable and demoable.
+
+async def replay_stream():
+    """
+    Streams the pre-generated telemetry playlist autonomously.
+
+    Reads backend/replay/playlist.json (produced by generate.py) and
+    replays each frame at 10fps. Fault telemetry is embedded in the
+    playlist — no external trigger is needed. SENTINEL monitors the
+    same telemetry stream it always did and fires when anomalies emerge
+    from the data naturally.
+
+    Loops through all loops in the playlist indefinitely, rotating
+    through the 3 fault scenarios so longer demo sessions show variety.
+    """
+    log.info("Loading replay playlist from %s", _PLAYLIST_PATH)
+    if not _PLAYLIST_PATH.exists():
+        log.error(
+            "Playlist not found at %s — run: python backend/replay/generate.py",
+            _PLAYLIST_PATH,
+        )
+        return
+
+    with open(_PLAYLIST_PATH) as f:
+        playlist = json.load(f)
+
+    log.info(
+        "Playlist loaded: %d loops, %d total frames (~%.1f min wall-clock at 10fps)",
+        len(playlist["loops"]),
+        playlist["total_frames"],
+        playlist["total_frames"] / 10 / 60,
+    )
+
+    # Lazy init agents once — reused across all loops.
     try:
         sherlock_agent = SherlockAgent()
     except EnvironmentError as key_err:
@@ -497,85 +537,101 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
     except EnvironmentError as key_err:
         log.warning("ATHENA disabled (no API key): %s", key_err)
         athena_agent = None
-    incident_in_progress = False
-    
-    # Keep references to background tasks to prevent garbage collection
-    background_tasks = set()
 
-    async def run_oracle_in_background(req: OracleRequest, diag):
-        try:
-            oracle_response = await asyncio.to_thread(run_oracle, req)
-        except Exception as e:
-            log.exception("ORACLE failed")
-            await manager.broadcast({
-                "type": "oracle_simulation",
-                "best_action": None,
-                "top_score": 0.0,
-                "mode": "failed",
-            })
-            await manager.broadcast({
-                "type": "athena_plan",
-                "recommended_action": None,
-                "rationale": f"ORACLE simulation failed ({type(e).__name__}) — no recovery plan available.",
-                "estimated_recovery_time_minutes": None,
-                "offline_fallback": True,
-            })
-            return
+    background_tasks: set = set()
+    global_timestamp = 0.0   # monotonically increasing wall-clock timestamp
 
-        oracle_msg = {
-            "type": "oracle_simulation",
-            "best_action": oracle_response.best_action,
-            "top_score": oracle_response.results[0].safety_score if oracle_response.results else 0.0,
-            "mode": oracle_response.mode,
-            "results": [
-                {
-                    "action_name": r.action_name,
-                    "safety_score": r.safety_score,
-                    "nominal_recovery_rate": r.mc_result.nominal_recovery_rate,
-                    "degraded_operation_rate": r.mc_result.degraded_operation_rate,
-                    "mission_loss_rate": r.mc_result.mission_loss_rate,
-                    "mean_final_battery_soc": r.mc_result.mean_final_battery_soc,
-                    "std_final_battery_soc": r.mc_result.std_final_battery_soc,
-                    "flags": r.flags,
-                }
-                for r in oracle_response.results
-            ],
+    loop_index = 0
+    while True:  # rotate through loops indefinitely
+        loop_def = playlist["loops"][loop_index % len(playlist["loops"])]
+        fault_scenario = loop_def["fault"]
+        severity       = loop_def["severity"]
+        loop_label     = loop_def["label"]
+
+        log.info(
+            "Starting replay loop %d — fault=%s severity=%.2f",
+            loop_index + 1, fault_scenario, severity,
+        )
+
+        # ── Broadcast loop start so the frontend can show which fault is coming
+        await manager.broadcast({
+            "type": "replay_loop_start",
+            "loop_index": loop_index,
+            "fault": fault_scenario,
+            "label": loop_label,
+            "subsystem": loop_def["subsystem"],
+            "severity": severity,
+        })
+
+        # ── Per-loop SENTINEL state ─────────────────────────────────────────────
+        # Compute nominal baseline from Act 1 frames for MAD calibration
+        act1_frames = loop_def["acts"][0]["frames"]
+        nom_data = {
+            "CADC0872": [f["state"]["adcs"]["attitude_error"]    for f in act1_frames],
+            "CADC0873": [f["state"]["adcs"]["reaction_wheel_speed"] for f in act1_frames],
+            "CADC0874": [f["state"]["eps"]["load_current"]         for f in act1_frames],
         }
-        await manager.broadcast(oracle_msg)
 
-        # ATHENA Planning (Non-blocking)
-        if athena_agent is None:
-            await manager.broadcast({
-                "type": "athena_plan",
-                "recommended_action": oracle_response.best_action,
-                "rationale": build_fallback_rationale(req.fault_name, oracle_response.best_action, req.current_state),
-                "estimated_recovery_time_minutes": None,
-                "offline_fallback": True,
-                "options": build_fallback_options(oracle_response),
-            })
-        else:
+        def compute_mad(series):
+            dx = np.abs(np.diff(series))
+            return np.median(np.abs(dx - np.median(dx))) if len(dx) > 0 else 0.0
+
+        static_mad_dict = {
+            "CADC0872": max(compute_mad(nom_data["CADC0872"]), 1e-6),
+            "CADC0873": max(compute_mad(nom_data["CADC0873"]), 1e-6),
+            "CADC0874": max(compute_mad(nom_data["CADC0874"]), 1e-6),
+        }
+
+        persistence        = SentinelPersistenceFilter(threshold=0.60, min_consecutive_steps=35)
+        physics_filter     = PhysicsSpikeFilter(window_size=10, min_spikes_required=2)
+        correlation_filter = ResidualCorrelationDetector()
+        window: list[dict] = []
+        incident_in_progress = False
+
+        async def run_oracle_in_background(req: OracleRequest, diag):
             try:
-                athena_plan = await asyncio.to_thread(athena_agent.plan, diag, oracle_response)
-                athena_msg = {
-                    "type": "athena_plan",
-                    "recommended_action": athena_plan.recommended_action,
-                    "rationale": athena_plan.overall_reasoning,
-                    "estimated_recovery_time_minutes": 15,
-                    "options": [
-                        {
-                            "action_name": o.action_name,
-                            "procedure_steps": o.procedure_steps,
-                            "safety_score": o.safety_score,
-                            "effectiveness_score": o.effectiveness_score,
-                            "is_irreversible": o.is_irreversible,
-                            "predicted_outcome": o.predicted_outcome,
-                        }
-                        for o in athena_plan.options
-                    ],
-                }
-                await manager.broadcast(athena_msg)
+                oracle_response = await asyncio.to_thread(run_oracle, req)
             except Exception as e:
-                log.exception("ATHENA failed")
+                log.exception("ORACLE failed")
+                await manager.broadcast({
+                    "type": "oracle_simulation",
+                    "best_action": None,
+                    "top_score": 0.0,
+                    "mode": "failed",
+                })
+                await manager.broadcast({
+                    "type": "athena_plan",
+                    "recommended_action": None,
+                    "rationale": f"ORACLE simulation failed ({type(e).__name__}) — no recovery plan available.",
+                    "estimated_recovery_time_minutes": None,
+                    "offline_fallback": True,
+                })
+                return
+
+            oracle_msg = {
+                "type": "oracle_simulation",
+                "best_action": oracle_response.best_action,
+                "top_score": oracle_response.results[0].safety_score if oracle_response.results else 0.0,
+                "mode": oracle_response.mode,
+                "results": [
+                    {
+                        "action_name": r.action_name,
+                        "safety_score": r.safety_score,
+                        "nominal_recovery_rate": r.mc_result.nominal_recovery_rate,
+                        "degraded_operation_rate": r.mc_result.degraded_operation_rate,
+                        "mission_loss_rate": r.mc_result.mission_loss_rate,
+                        "mean_final_battery_soc": r.mc_result.mean_final_battery_soc,
+                        "std_final_battery_soc": r.mc_result.std_final_battery_soc,
+                        "flags": r.flags,
+                    }
+                    for r in oracle_response.results
+                ],
+            }
+            await manager.broadcast(oracle_msg)
+
+            # ATHENA Planning (Non-blocking)
+            athena_plan = None
+            if athena_agent is None:
                 await manager.broadcast({
                     "type": "athena_plan",
                     "recommended_action": oracle_response.best_action,
@@ -584,270 +640,240 @@ async def simulate_stream(fault_scenario: str | None = None, severity: float = 0
                     "offline_fallback": True,
                     "options": build_fallback_options(oracle_response),
                 })
+            else:
+                try:
+                    athena_plan = await asyncio.to_thread(athena_agent.plan, diag, oracle_response)
+                    athena_msg = {
+                        "type": "athena_plan",
+                        "recommended_action": athena_plan.recommended_action,
+                        "rationale": athena_plan.overall_reasoning,
+                        "estimated_recovery_time_minutes": 15,
+                        "options": [
+                            {
+                                "action_name": o.action_name,
+                                "procedure_steps": o.procedure_steps,
+                                "safety_score": o.safety_score,
+                                "effectiveness_score": o.effectiveness_score,
+                                "is_irreversible": o.is_irreversible,
+                                "predicted_outcome": o.predicted_outcome,
+                            }
+                            for o in athena_plan.options
+                        ],
+                    }
+                    await manager.broadcast(athena_msg)
+                except Exception as e:
+                    log.exception("ATHENA failed")
+                    await manager.broadcast({
+                        "type": "athena_plan",
+                        "recommended_action": oracle_response.best_action,
+                        "rationale": build_fallback_rationale(req.fault_name, oracle_response.best_action, req.current_state),
+                        "estimated_recovery_time_minutes": None,
+                        "offline_fallback": True,
+                        "options": build_fallback_options(oracle_response),
+                    })
 
-    for frame in sim.frames:
-        await asyncio.sleep(0.1) # stream ten simulation frames per second (very fast demo mode)
-        
-        # Format Telemetry for Frontend
-        telemetry_msg = {
-            "type": "telemetry",
-            "timestamp": frame.timestamp,
-            "subsystems": {
-                "ADCS": {"attitude_error": frame.state.adcs.attitude_error, "reaction_wheel_speed": frame.state.adcs.reaction_wheel_speed},
-                "EPS": {"battery_soc": frame.state.eps.battery_soc, "bus_voltage": frame.state.eps.bus_voltage}
-            }
-        }
-        await manager.broadcast(telemetry_msg)
-        
-        # Vitals Update
-        vitals_payload = calculate_vitals(frame.state)
-        vitals_msg = {
-            "type": "vitals_update",
-            "timestamp": frame.timestamp,
-            "payload": vitals_payload
-        }
-        await manager.broadcast(vitals_msg)
-
-        # Engine C — residual correlation. Runs every frame (not gated by the
-        # 20-frame window Engine A/B need) so the residual chart has data
-        # from t=0, and so a correlated break can be caught as early as
-        # possible rather than waiting for the window to fill.
-        corr_alarm, err_actual, err_pred, wheel_actual, wheel_pred = correlation_filter.update(
-            frame.state.adcs.attitude_error, frame.state.adcs.reaction_wheel_speed
-        )
-        await manager.broadcast({
-            "type": "residual_update",
-            "timestamp": frame.timestamp,
-            "attitude_error": {"actual": err_actual, "predicted": err_pred},
-            "reaction_wheel_speed": {"actual": wheel_actual, "predicted": wheel_pred},
-        })
-
-        row = {
-            'CADC0872': frame.state.adcs.attitude_error,
-            'CADC0873': frame.state.adcs.reaction_wheel_speed,
-            'CADC0874': frame.state.eps.load_current,
-        }
-        window.append(row)
-        if len(window) > 20: window.pop(0)
-        
-        if len(window) == 20:
-            df = pd.DataFrame(window)
-            xgb_score, _ = score_xgboost(df, 'CADC0872')
-            alarm_flatline = persistence.update(xgb_score)
-            alarm_spike, _ = physics_filter.update(df, static_mad_dict, mad_multiplier=4.0)
-
-            is_anomaly = alarm_flatline or alarm_spike or corr_alarm
-
-            # Fallback for missing ML model: trigger on the worst single
-            # subsystem, not the 3-way average (see vitals/agent.py — the
-            # average masks a fully-degraded single subsystem).
-            if not is_anomaly and vitals_payload["worst_health"] < 0.85:
-                is_anomaly = True
-                alarm_flatline = True # simulate detection
-
-            # Rising-edge trigger for incident latch
-            if is_anomaly and not incident_in_progress:
-                incident_in_progress = True
-                firing = [n for n, f in (
-                    ("Engine A (Telemetry)", alarm_flatline),
-                    ("Engine B (Physics)", alarm_spike),
-                    ("Engine C (Residual Correlation)", corr_alarm),
-                ) if f]
-                triggered_engine = " + ".join(firing) if firing else "Engine A (Telemetry)"
-
-                sentinel_msg = {
-                    "type": "sentinel_alert",
-                    "is_anomaly": True,
-                    "triggered_engine": triggered_engine,
-                    "timestamp": frame.timestamp,
-                    "false_positive": fault_scenario is None,
-                }
-                await manager.broadcast(sentinel_msg)
-
-                if fault_scenario is None:
-                    # No fault is actually injected — this is a genuine false
-                    # positive from one of the detection engines (Engine B's
-                    # spike filter is known-noisy, see roadmap.md §2). There's
-                    # nothing real to diagnose, and previously this crashed
-                    # ORACLE with KeyError('unknown') trying to look up a
-                    # fault name that doesn't exist in FAULT_CATALOG — caught
-                    # directly running the auto-started nominal stream at
-                    # server boot. Surface the alert (it's honest signal
-                    # about detector noise) but skip the rest of the pipeline.
-                    log.warning(
-                        "sentinel_alert fired with no fault injected (false "
-                        "positive from %s) — skipping diagnosis/oracle/athena",
-                        triggered_engine,
+            # Phase 3: ORACLE Phase 2 deeper MC re-validation
+            recommended = athena_plan.recommended_action if athena_plan else oracle_response.best_action
+            if recommended:
+                try:
+                    await manager.broadcast({"type": "oracle_validation_start", "action": recommended})
+                    val_req = OracleRequest(
+                        current_state=req.current_state,
+                        fault_name=req.fault_name,
+                        fault_severity=req.fault_severity,
+                        proposed_actions=[recommended],
+                        diagnosis_context=req.diagnosis_context,
+                        n_runs=200,
+                        steps=600,
                     )
-                    continue
+                    val_response = await asyncio.to_thread(run_oracle, val_req)
+                    if val_response.results:
+                        r = val_response.results[0]
+                        prob = safety_score_to_probability(r.safety_score)
+                        await manager.broadcast({
+                            "type": "oracle_validation",
+                            "action_name": r.action_name,
+                            "safety_score": r.safety_score,
+                            "success_probability": prob,
+                            "nominal_recovery_rate": r.mc_result.nominal_recovery_rate,
+                            "degraded_operation_rate": r.mc_result.degraded_operation_rate,
+                            "mission_loss_rate": r.mc_result.mission_loss_rate,
+                            "mean_final_battery_soc": r.mc_result.mean_final_battery_soc,
+                            "std_final_battery_soc": r.mc_result.std_final_battery_soc,
+                            "n_runs": r.mc_result.n_runs,
+                            "flags": r.flags,
+                            "phase1_oracle_winner": oracle_response.best_action,
+                            "athena_agreed": recommended == oracle_response.best_action,
+                        })
+                except Exception:
+                    log.exception("Oracle Phase 2 validation failed for action=%s", recommended)
 
-                # DIAGNOSIS (Non-blocking)
-                # Same fix as SimulatorTelemetryProvider above — frame.timestamp
-                # is sim-elapsed seconds, not a real epoch offset.
-                dt_ts = datetime.now(timezone.utc)
-                flagged_subsystem, flagged_parameter = FAULT_SUBSYSTEM_MAP.get(
-                    fault_scenario, ("EPS", "unknown")
-                )
-                anomaly_event = AnomalyEvent(
-                    anomaly_id="EVT-001",
-                    timestamp=dt_ts,
-                    flagged_subsystem=flagged_subsystem,
-                    flagged_parameter=flagged_parameter,
-                    # Not a calibrated probability — this pipeline's detectors
-                    # (XGBoost flatline score, physics spike filter, VITALS
-                    # threshold fallback) don't produce one. 0.75 signals
-                    # "detected, moderately confident" without pretending to
-                    # more precision than the underlying detectors actually have.
-                    confidence_score=0.75,
-                    severity=SeverityLevel.HIGH,
-                    telemetry_window=[]
-                )
-                
-                provider = SimulatorTelemetryProvider(frame.state)
-                if sherlock_agent is None:
-                    # No API key — grounded fallback diagnosis so the rest of
-                    # the pipeline (GUARDIAN/ORACLE/ATHENA, and the frontend
-                    # consuming this message) stays fully exercisable and the
-                    # reasoning shown is a real physics-based analysis rather
-                    # than a placeholder.
-                    diagnosis = build_fallback_diagnosis(fault_scenario, frame.state, severity)
-                else:
-                    # Run SHERLOCK in a separate thread to prevent blocking the event loop.
-                    # A network/API failure here must not kill the whole streaming task —
-                    # previously unguarded, so a single SHERLOCK error (timeout, rate limit,
-                    # malformed LLM response) silently ended the pipeline right after the
-                    # sentinel_alert, with nothing downstream ever firing again.
-                    try:
-                        diagnosis = await asyncio.to_thread(sherlock_agent.diagnose, anomaly_event, provider)
-                    except Exception as e:
-                        log.exception("SHERLOCK failed")
-                        diagnosis = build_fallback_diagnosis(fault_scenario, frame.state, severity)
+        # ── Stream all acts in this loop ──────────────────────────────────────
+        for act in loop_def["acts"]:
+            act_name = act["name"]
+            log.info("  Act: %s (%d frames)", act_name, len(act["frames"]))
 
-                sherlock_msg = {
-                    "type": "sherlock_diagnosis",
-                    "primary_root_cause": diagnosis.primary_root_cause,
-                    "causal_chain": diagnosis.causal_chain,
-                    "affected_subsystems": diagnosis.affected_subsystems,
-                    "confidence_score": diagnosis.confidence_score,
-                    "urgency": diagnosis.urgency.value,
-                    "time_to_critical": diagnosis.time_to_critical_estimate_minutes,
-                    "reasoning": diagnosis.reasoning,
-                }
-                await manager.broadcast(sherlock_msg)
-                
-                # SAFING (GUARDIAN)
-                guardian_status = "AUTOMATED_GUARDED"
-                action_taken = None
-                
-                ttc = diagnosis.time_to_critical_estimate_minutes
-                if ttc is not None and ttc < 5:
-                    guardian_status = "AUTONOMOUS_SAFED"
-                    action_taken = "shed_nonessential_load"
-                elif diagnosis.urgency in (UrgencyLevel.HIGH, UrgencyLevel.CRITICAL):
-                    guardian_status = "MANUAL_INTERLOCK"
-                    
-                guardian_msg = {
-                    "type": "guardian_action",
-                    "status": guardian_status,
-                    "action_taken": action_taken,
-                }
-                await manager.broadcast(guardian_msg)
-                
-                # SIMULATION (ORACLE) in background
-                req = OracleRequest(
-                    current_state=frame.state,
-                    fault_name=fault_scenario,
-                    fault_severity=severity,
-                    diagnosis_context=diagnosis.reasoning
-                )
-                
-                # Submit ORACLE and ATHENA to background task
-                task = asyncio.create_task(run_oracle_in_background(req, diagnosis))
-                background_tasks.add(task)
-                task.add_done_callback(background_tasks.discard)
-                
-            # Optional latch reset if telemetry returns to normal for a sustained period
-            elif not is_anomaly and incident_in_progress:
-                # Basic reset logic: if we have 0 triggers in the window, we could reset. 
-                # For simplicity, we just leave it latched until the frontend clears it.
-                pass
+            for frame_dict in act["frames"]:
+                await asyncio.sleep(0.1)   # 10fps
 
-    # ── Continuous keep-alive after simulation frames exhaust ────────────────
-    # The 600-frame fault sim finishes in ~60 real-world seconds (0.1s/frame).
-    # Without this loop the WS connection stays open but no new residual_update
-    # or telemetry messages are sent, so the Sentinel residual chart goes blank.
-    #
-    # BUG FIXED HERE: this used to unconditionally call simulate_scenario(
-    # fault=None, ...) once the fault sim ran out — meaning any fault whose
-    # visible damage takes longer than ~60 real seconds to become obvious
-    # (e.g. adcs_sensor_fusion_failure, ramp_time_s=45, still climbing at
-    # t=600s) would have VITALS silently jump back to 100% healthy the
-    # moment a demo lingered on it — while GUARDIAN was still sitting in
-    # MANUAL_INTERLOCK, awaiting an approval that hadn't happened. The
-    # satellite has no business healing itself before a human (or GUARDIAN)
-    # actually acts. Now: if a fault is active, keep extending that same
-    # fault forward from where it left off instead of switching to nominal.
-    #
-    # timestamp_offset: keeps frame.timestamp monotonically increasing past
-    # the end of the fault sim (600.0s), so the frontend residualHistory ring
-    # buffer has consistent timestamps and the detectAtIndex anomaly-marker
-    # lookup stays valid for the lifetime of the incident.
-    log.info("Simulation frames exhausted — entering continuous keep-alive loop (fault=%s)", fault_scenario)
-    timestamp_offset = 600.0  # fault sim ran for 600 seconds
-    last_fault_state = sim.frames[-1].state if fault_scenario else None
-    while True:
-        if fault_scenario is not None:
-            # Continue the same fault onward from its current (degraded) state
-            # rather than reverting to a fresh nominal run.
-            nom_batch = simulate_scenario(
-                fault=fault_scenario, duration=30.0, dt=1.0, fault_onset=0.0,
-                severity=severity, initial_state=last_fault_state,
-            )
-            last_fault_state = nom_batch.frames[-1].state
-        else:
-            nom_batch = simulate_scenario(fault=None, duration=30.0, dt=1.0)
-        # Reset correlation detector EWMA once per batch so forecasts stay
-        # sensible on fresh nominal data (no stale fault residuals leaking in).
-        correlation_filter = ResidualCorrelationDetector()
-        for frame in nom_batch.frames:
-            await asyncio.sleep(0.1)
-            ts = timestamp_offset + frame.timestamp  # monotonic timestamp
-            # Telemetry
-            telemetry_msg = {
-                "type": "telemetry",
-                "timestamp": ts,
-                "subsystems": {
-                    "ADCS": {
-                        "attitude_error": frame.state.adcs.attitude_error,
-                        "reaction_wheel_speed": frame.state.adcs.reaction_wheel_speed,
+                state = _dict_to_state(frame_dict["state"])
+
+                # ── Telemetry broadcast ─────────────────────────────────────
+                telemetry_msg = {
+                    "type": "telemetry",
+                    "timestamp": global_timestamp,
+                    "act": act_name,
+                    "fault_label": frame_dict["fault_label"],
+                    "subsystems": {
+                        "ADCS": {
+                            "attitude_error": state.adcs.attitude_error,
+                            "reaction_wheel_speed": state.adcs.reaction_wheel_speed,
+                        },
+                        "EPS": {
+                            "battery_soc": state.eps.battery_soc,
+                            "bus_voltage": state.eps.bus_voltage,
+                        },
                     },
-                    "EPS": {
-                        "battery_soc": frame.state.eps.battery_soc,
-                        "bus_voltage": frame.state.eps.bus_voltage,
-                    },
-                },
-            }
-            await manager.broadcast(telemetry_msg)
-            # Vitals
-            vitals_payload = calculate_vitals(frame.state)
-            await manager.broadcast({
-                "type": "vitals_update",
-                "timestamp": ts,
-                "payload": vitals_payload,
-            })
-            # Residual update (Engine C)
-            _, err_actual, err_pred, wheel_actual, wheel_pred = correlation_filter.update(
-                frame.state.adcs.attitude_error,
-                frame.state.adcs.reaction_wheel_speed,
-            )
-            await manager.broadcast({
-                "type": "residual_update",
-                "timestamp": ts,
-                "attitude_error": {"actual": err_actual, "predicted": err_pred},
-                "reaction_wheel_speed": {"actual": wheel_actual, "predicted": wheel_pred},
-            })
-        # Advance offset past the just-completed 30s batch
-        timestamp_offset += 30.0
+                }
+                await manager.broadcast(telemetry_msg)
+
+                # ── Vitals ──────────────────────────────────────────────────
+                vitals_payload = calculate_vitals(state)
+                await manager.broadcast({
+                    "type": "vitals_update",
+                    "timestamp": global_timestamp,
+                    "payload": vitals_payload,
+                })
+
+                # ── Engine C — residual correlation ─────────────────────────
+                corr_alarm, err_actual, err_pred, wheel_actual, wheel_pred = correlation_filter.update(
+                    state.adcs.attitude_error, state.adcs.reaction_wheel_speed
+                )
+                await manager.broadcast({
+                    "type": "residual_update",
+                    "timestamp": global_timestamp,
+                    "attitude_error": {"actual": err_actual, "predicted": err_pred},
+                    "reaction_wheel_speed": {"actual": wheel_actual, "predicted": wheel_pred},
+                })
+
+                # ── Engine A + B (XGBoost + Physics) ───────────────────────
+                row = {
+                    "CADC0872": state.adcs.attitude_error,
+                    "CADC0873": state.adcs.reaction_wheel_speed,
+                    "CADC0874": state.eps.load_current,
+                }
+                window.append(row)
+                if len(window) > 20:
+                    window.pop(0)
+
+                if len(window) == 20:
+                    df = pd.DataFrame(window)
+                    xgb_score, _ = score_xgboost(df, "CADC0872")
+                    alarm_flatline = persistence.update(xgb_score)
+                    alarm_spike, _ = physics_filter.update(df, static_mad_dict, mad_multiplier=4.0)
+
+                    is_anomaly = alarm_flatline or alarm_spike or corr_alarm
+
+                    # Fallback: VITALS health threshold
+                    if not is_anomaly and vitals_payload["worst_health"] < 0.85:
+                        is_anomaly = True
+                        alarm_flatline = True
+
+                    # ── Rising-edge trigger ─────────────────────────────────
+                    if is_anomaly and not incident_in_progress:
+                        incident_in_progress = True
+                        firing = [n for n, f in (
+                            ("Engine A (Telemetry)", alarm_flatline),
+                            ("Engine B (Physics)", alarm_spike),
+                            ("Engine C (Residual Correlation)", corr_alarm),
+                        ) if f]
+                        triggered_engine = " + ".join(firing) if firing else "Engine A (Telemetry)"
+
+                        sentinel_msg = {
+                            "type": "sentinel_alert",
+                            "is_anomaly": True,
+                            "triggered_engine": triggered_engine,
+                            "timestamp": global_timestamp,
+                            "false_positive": False,   # playlist always has real faults
+                            "fault_label": loop_label,
+                        }
+                        await manager.broadcast(sentinel_msg)
+
+                        # DIAGNOSIS (SHERLOCK)
+                        dt_ts = datetime.now(timezone.utc)
+                        flagged_subsystem, flagged_parameter = FAULT_SUBSYSTEM_MAP.get(
+                            fault_scenario, ("EPS", "unknown")
+                        )
+                        anomaly_event = AnomalyEvent(
+                            anomaly_id=f"EVT-{loop_index+1:03d}",
+                            timestamp=dt_ts,
+                            flagged_subsystem=flagged_subsystem,
+                            flagged_parameter=flagged_parameter,
+                            confidence_score=0.75,
+                            severity=SeverityLevel.HIGH,
+                            telemetry_window=[],
+                        )
+
+                        provider = SimulatorTelemetryProvider(state)
+                        if sherlock_agent is None:
+                            diagnosis = build_fallback_diagnosis(fault_scenario, state, severity)
+                        else:
+                            try:
+                                diagnosis = await asyncio.to_thread(
+                                    sherlock_agent.diagnose, anomaly_event, provider
+                                )
+                            except Exception:
+                                log.exception("SHERLOCK failed")
+                                diagnosis = build_fallback_diagnosis(fault_scenario, state, severity)
+
+                        await manager.broadcast({
+                            "type": "sherlock_diagnosis",
+                            "primary_root_cause": diagnosis.primary_root_cause,
+                            "causal_chain": diagnosis.causal_chain,
+                            "affected_subsystems": diagnosis.affected_subsystems,
+                            "confidence_score": diagnosis.confidence_score,
+                            "urgency": diagnosis.urgency.value,
+                            "time_to_critical": diagnosis.time_to_critical_estimate_minutes,
+                            "reasoning": diagnosis.reasoning,
+                        })
+
+                        # GUARDIAN
+                        guardian_status = "AUTOMATED_GUARDED"
+                        action_taken = None
+                        ttc = diagnosis.time_to_critical_estimate_minutes
+                        if ttc is not None and ttc < 5:
+                            guardian_status = "AUTONOMOUS_SAFED"
+                            action_taken = "shed_nonessential_load"
+                        elif diagnosis.urgency in (UrgencyLevel.HIGH, UrgencyLevel.CRITICAL):
+                            guardian_status = "MANUAL_INTERLOCK"
+
+                        await manager.broadcast({
+                            "type": "guardian_action",
+                            "status": guardian_status,
+                            "action_taken": action_taken,
+                        })
+
+                        # ORACLE + ATHENA (background)
+                        req = OracleRequest(
+                            current_state=state,
+                            fault_name=fault_scenario,
+                            fault_severity=severity,
+                            diagnosis_context=diagnosis.reasoning,
+                        )
+                        task = asyncio.create_task(run_oracle_in_background(req, diagnosis))
+                        background_tasks.add(task)
+                        task.add_done_callback(background_tasks.discard)
+
+                global_timestamp += 1.0
+
+        # ── End of loop — broadcast reset for frontend to clear incident state
+        await manager.broadcast({
+            "type": "replay_loop_end",
+            "loop_index": loop_index,
+            "fault": fault_scenario,
+            "label": loop_label,
+        })
+        loop_index += 1
 
 
 def stream_task_done_callback(task):
@@ -861,30 +887,12 @@ def stream_task_done_callback(task):
 @app.on_event("startup")
 async def startup_event():
     global current_stream_task
-    current_stream_task = asyncio.create_task(simulate_stream(fault_scenario=None))
+    current_stream_task = asyncio.create_task(replay_stream())
     current_stream_task.add_done_callback(stream_task_done_callback)
 
-@app.post("/trigger")
-async def trigger_fault(req: FaultTriggerRequest):
-    global current_stream_task
-    if current_stream_task:
-        current_stream_task.cancel()
-        # .cancel() only *schedules* a CancelledError for the next await
-        # point inside the task — it doesn't stop it synchronously. Without
-        # awaiting here, the old task could still be mid-frame (possibly
-        # already in an anomalous state from the previous run) and broadcast
-        # one or two more messages to every connected client after the new
-        # task has already started, which looked like the new run "auto-
-        # injecting" an anomaly or a stale CHRONICLE entry from the wrong
-        # fault leaking into the new stream.
-        try:
-            await current_stream_task
-        except asyncio.CancelledError:
-            pass
-    fault = None if req.fault_name == "nominal" else req.fault_name
-    current_stream_task = asyncio.create_task(simulate_stream(fault_scenario=fault, severity=req.severity))
-    current_stream_task.add_done_callback(stream_task_done_callback)
-    return {"status": "success", "message": f"Stream reset to {fault or 'nominal'}"}
+# NOTE: /trigger endpoint removed — streaming is now fully autonomous.
+# The replay playlist rotates through fault scenarios without user input.
+# To regenerate the playlist, run: python backend/replay/generate.py
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):

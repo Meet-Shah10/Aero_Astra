@@ -114,9 +114,9 @@ function Earth({ isRotating }) {
 export default function Globe3D({ isRotating = true }) {
   return (
     <Canvas
-      dpr={[1, 2]}
+      dpr={[1, 1]}
       camera={{ position: [0, 0, 6.2], fov: 42 }}
-      gl={{ antialias: true, alpha: true }}
+      gl={{ antialias: false, alpha: true, powerPreference: "low-power" }}
       style={{ width: '100%', height: '100%' }}
     >
       <ambientLight intensity={0.4} />

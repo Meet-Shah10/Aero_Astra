@@ -3,7 +3,7 @@
    Consumes backend/api.py's 'residual_update' WS stream (Engine C). */
 
 const W = 560;
-const H = 90;
+const H = 45;
 const PAD_L = 4;
 const PAD_R = 4;
 

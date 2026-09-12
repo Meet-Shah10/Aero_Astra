@@ -23,13 +23,13 @@ useGLTF.preload('/simple_satellite_low_poly_free.glb');
 //  page that overclaims is worse than one that's honest about what's live.
 // ─────────────────────────────────────────────────────────────────────────────
 const AGENT_ROSTER = [
+  { code: 'CHRONICLE', role: 'The Live Log', desc: 'A running event log of everything happening, in real time, as it happens.', status: 'wired' },
   { code: 'SENTINEL', role: 'The Early Warning System', desc: 'Watches all telemetry 24/7 and knows when something starts to look wrong — before a human would notice.', status: 'wired' },
   { code: 'SHERLOCK', role: 'The Detective', desc: "When SENTINEL raises an alarm, SHERLOCK figures out why — tracing the problem back to its root cause through a physics-constrained causal graph.", status: 'wired' },
   { code: 'ORACLE', role: 'The Simulator', desc: 'Runs 100 independent Monte Carlo simulations of each candidate fix before anything executes — odds, not guesses.', status: 'wired' },
   { code: 'ATHENA', role: 'The Strategist', desc: "Using ORACLE's simulations, picks the best recovery plan and writes out every step, in order, with its reasoning.", status: 'wired' },
   { code: 'GUARDIAN', role: 'The Safety Gate', desc: 'Low-risk fixes auto-execute and log themselves. High-risk fixes wait for a human to press approve — nothing executes without it.', status: 'wired' },
   { code: 'SCRIBE', role: 'The Accountant', desc: "Every decision, every step, every agent's reasoning gets written into an audit trail automatically.", status: 'planned' },
-  { code: 'CHRONICLE', role: 'The Live Log', desc: 'A running event log of everything happening, in real time, as it happens.', status: 'wired' },
   { code: 'VITALS', role: 'The Proactive Monitor', desc: 'Tracks subsystem health scores and remaining-useful-life estimates so degradation is visible before it becomes an anomaly.', status: 'wired' },
 ];
 
@@ -319,14 +319,14 @@ function App() {
     { id: 'about', label: 'About', onClick: () => setActiveView('about') },
   ], []);
 
-  // Scenario picker + comparison panel state
-  const [showScenarioPicker, setShowScenarioPicker] = useState(false);
-  const [pendingScenario, setPendingScenario] = useState('thermal_runaway');
-  const [pendingSeverity, setPendingSeverity] = useState(0.7);
+  // Autonomous streaming — no picker state needed.
+  // activeScenario is populated by replay_loop_start WS events.
   const [activeScenario, setActiveScenario] = useState(null);
   const [activeSeverity, setActiveSeverity] = useState(null);
   const [guardianTier, setGuardianTier] = useState(null); // 'AUTOMATED_GUARDED' | 'MANUAL_INTERLOCK'
   const [showDiff, setShowDiff] = useState(false);
+  // Current replay act ('nominal' | 'fault_developing' | 'recovery') — used for the phase badge
+  const [replayAct, setReplayAct] = useState('nominal');
 
   // ── Real backend WebSocket state ──
   // wsRef keeps one persistent connection open while the dashboard is visible.
@@ -418,11 +418,61 @@ function App() {
               }
               break;
             }
+            case 'replay_loop_start': {
+              // Backend started a new autonomous fault loop — populate activeScenario
+              // so downstream UI (SCRIBE runbook, CHRONICLE causal chain, etc.) has
+              // the right fault label/subsystem without any user input.
+              const loopScenario = {
+                key: msg.fault,
+                faultId: msg.fault,
+                label: msg.label,
+                subsystem: msg.subsystem,
+                rootCause: msg.label,
+                causalChain: [msg.subsystem],
+                isCaseStudy: false,
+              };
+              setActiveScenario(loopScenario);
+              activeScenarioRef.current = loopScenario;
+              setActiveSeverity(msg.severity);
+              setReplayAct('nominal');
+              setLogs(prev => [...prev,
+                `> REPLAY: Starting autonomous loop — ${msg.label} (severity ${msg.severity.toFixed(2)})`,
+                '> SENTINEL: Monitoring telemetry stream for anomalies...',
+              ]);
+              break;
+            }
+            case 'replay_loop_end': {
+              // Loop finished — reset state so the dashboard returns to
+              // nominal monitoring display while the next loop loads.
+              setReplayAct('nominal');
+              setLogs(prev => [...prev,
+                `> REPLAY: Loop ${msg.loop_index + 1} complete (${msg.label}). Resetting for next scenario...`,
+                '> System nominal. Next fault cycle starting...',
+              ]);
+              // Give the log a moment to read, then reset incident state.
+              setTimeout(() => {
+                setScenarioPhase('nominal');
+                setGuardianApproved(false);
+                setSelectedMitigation(1);
+                lastWorstHealthRef.current = 1.0;
+                setGuardianTier(null);
+                setShowDiff(false);
+                setScribeReport(null);
+                setBackendData(prev => ({
+                  sentinel: null, sherlock: null, oracle: null, athena: null,
+                  guardian: null, telemetry: null, vitals: null,
+                  residualHistory: prev.residualHistory ?? [],
+                }));
+              }, 2000);
+              break;
+            }
             case 'sentinel_alert':
               setBackendData(prev => ({ ...prev, sentinel: msg }));
               setScenarioPhase('detected');
+              setReplayAct('fault_developing');
               setLogs(prev => [...prev,
-                `> ⚠ SENTINEL: Anomaly detected via ${msg.triggered_engine}`,
+                `> ⚠ SENTINEL: Anomaly detected via ${msg.triggered_engine}` +
+                (msg.fault_label ? ` — ${msg.fault_label}` : ''),
               ]);
               break;
             case 'residual_update':
@@ -443,7 +493,19 @@ function App() {
               setBackendData(prev => ({ ...prev, oracle: msg }));
               setScenarioPhase(p => (p === 'diagnosing' || p === 'detected') ? 'planning' : p);
               setLogs(prev => [...prev,
-                `> ORACLE: Best action → ${msg.best_action} (score ${msg.top_score?.toFixed(2)})`,
+                `> ORACLE Phase 1: Best action → ${msg.best_action} (score ${msg.top_score?.toFixed(2)})`,
+              ]);
+              break;
+            case 'oracle_validation_start':
+              setLogs(prev => [...prev,
+                `> ORACLE Phase 2: Validating ATHENA's pick → "${msg.action}" (200 runs, deeper MC)...`,
+              ]);
+              break;
+            case 'oracle_validation':
+              setBackendData(prev => ({ ...prev, oracleValidation: msg }));
+              setLogs(prev => [...prev,
+                `> ORACLE Phase 2: "${msg.action_name}" validated | score=${msg.safety_score?.toFixed(3)} | prob=${Math.round((msg.success_probability ?? 0) * 100)}%` +
+                (msg.athena_agreed ? '' : ` | ATHENA differed from Oracle Phase 1 winner "${msg.phase1_oracle_winner}"`),
               ]);
               break;
             case 'athena_plan':
@@ -452,6 +514,7 @@ function App() {
                 `> ATHENA: Plan → ${msg.recommended_action}`,
               ]);
               break;
+
             case 'guardian_action':
               setBackendData(prev => ({ ...prev, guardian: msg }));
               setGuardianTier(msg.status);
@@ -535,83 +598,8 @@ function App() {
     setGuardianTier(null);
     setShowDiff(false);
     setScribeReport(null);
+    setReplayAct('nominal');
     setLogs(['> System reset.', '> Telemetry linked on band S7.', '> SENTINEL: Monitoring 5 active assets.']);
-  };
-
-  const openScenarioPicker = () => {
-    if (scenarioPhase !== 'nominal' && scenarioPhase !== 'resolved') {
-      resetSystem();
-      return;
-    }
-    setShowScenarioPicker(true);
-  };
-
-  // Launches the chosen scenario — calls real backend POST /trigger,
-  // then state is driven by incoming WebSocket messages above.
-  // The mock liveOverride still fills in for telemetry fields not yet streamed.
-  const launchScenario = () => {
-    const scenario = ALL_SCENARIOS[pendingScenario];
-    const severity = pendingSeverity;
-
-    setShowScenarioPicker(false);
-    setActiveScenario(scenario);
-    activeScenarioRef.current = scenario;
-    lastWorstHealthRef.current = 1.0;
-    setActiveSeverity(severity);
-    setShowDiff(false);
-    // Reset agent data from the last run but KEEP residualHistory so the
-    // Sentinel chart doesn't go blank during the ~20-frame window before new
-    // residual_update messages arrive from the freshly-started stream.
-    setBackendData(prev => ({ sentinel: null, sherlock: null, oracle: null, athena: null, guardian: null, telemetry: null, vitals: null, residualHistory: prev.residualHistory ?? [] }));
-    setScenarioPhase('nominal');
-    setGuardianTier(null);
-    setGuardianApproved(false);
-    setScribeReport(null);
-
-    // Call real backend — kicks off the physics simulation + full agent pipeline.
-    // Falls back silently if backend is offline (keeps the UI usable in demo mode).
-    fetch('http://localhost:8000/trigger', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fault_name: scenario.faultId, severity }),
-    }).then(r => r.json()).then(data => {
-      setLogs(prev => [...prev,
-        `> BACKEND: Scenario "${scenario.label}" injected (severity ${severity.toFixed(2)}).`,
-        '> SENTINEL: Starting physics simulation + anomaly scoring...',
-      ]);
-    }).catch(() => {
-      // Backend offline — fall back to the original mock timer cascade
-      setLogs(prev => [...prev,
-        '> ⚠ BACKEND OFFLINE: Running in mock mode (no real pipeline).',
-        `> ⚠ WARN: Anomaly detected at ${scenario.subsystem}.`,
-      ]);
-      setScenarioPhase('detected');
-      setTimeout(() => {
-        setScenarioPhase('diagnosing');
-        setLogs(prev => [...prev,
-          '> SHERLOCK: Building causal dependency graph...',
-          `> SHERLOCK: Root cause isolated → ${scenario.causalChain.join(' → ')}.`,
-        ]);
-        setTimeout(() => {
-          setScenarioPhase('planning');
-          setLogs(prev => [...prev, '> ATHENA: Generating recovery options.']);
-          setTimeout(() => {
-            const isHighRisk = severity >= HIGH_RISK_SEVERITY_THRESHOLD;
-            if (isHighRisk) {
-              setGuardianTier('MANUAL_INTERLOCK');
-              setScenarioPhase('awaiting_approval');
-              setLogs(prev => [...prev, '> GUARDIAN: HIGH severity → MANUAL_INTERLOCK.']);
-            } else {
-              setGuardianTier('AUTOMATED_GUARDED');
-              setGuardianApproved(true);
-              setScenarioPhase('awaiting_approval');
-              setLogs(prev => [...prev, '> GUARDIAN: AUTOMATED_GUARDED — executing.']);
-              setTimeout(() => executeRunbook(scenario), 900);
-            }
-          }, 3000);
-        }, 3000);
-      }, 3000);
-    });
   };
 
   const handleApprove = (e) => {
@@ -1002,85 +990,6 @@ function App() {
     <div className="dashboard-container fade-enter" style={{ paddingTop: '96px', paddingBottom: '36px' }}>
       {activeView === 'about' ? <AboutView /> : (
       <>
-      {showScenarioPicker && (
-        <div style={{
-          position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(2,3,8,0.75)',
-          backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <div style={{
-            width: '100%', maxWidth: '640px', background: 'rgba(8,10,18,0.96)',
-            border: '1px solid rgba(230,232,236,0.25)', borderRadius: '6px', padding: '28px 32px',
-            boxShadow: '0 0 60px rgba(230,232,236,0.08), 0 20px 60px rgba(0,0,0,0.6)',
-          }}>
-            <div style={{ fontSize: '10px', letterSpacing: '0.3em', color: '#EDEEF2', textTransform: 'uppercase', fontWeight: 'bold', marginBottom: '4px' }}>
-              INJECT FAULT SCENARIO
-            </div>
-            <div className="text-muted" style={{ fontSize: '11px', marginBottom: '20px' }}>
-              Runs through the real physics digital twin. Severity decides whether GUARDIAN auto-executes or requires your approval.
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px', marginBottom: '22px' }}>
-              {Object.values(FAULT_SCENARIOS).map(s => (
-                <div key={s.key} onClick={() => setPendingScenario(s.key)} style={{
-                  border: pendingScenario === s.key ? '1px solid #EDEEF2' : '1px solid rgba(255,255,255,0.08)',
-                  background: pendingScenario === s.key ? 'rgba(230,232,236,0.08)' : 'rgba(255,255,255,0.02)',
-                  borderRadius: '4px', padding: '12px 10px', cursor: 'pointer', transition: 'border-color 0.15s ease, background 0.15s ease',
-                }}>
-                  <div style={{ fontSize: '11px', fontWeight: 'bold', color: pendingScenario === s.key ? '#EDEEF2' : '#ccc', marginBottom: '4px' }}>
-                    {s.label}
-                  </div>
-                  <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.4)', lineHeight: 1.5 }}>{s.summary}</div>
-                </div>
-              ))}
-            </div>
-
-            <div style={{ fontSize: '9px', letterSpacing: '0.15em', color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', marginBottom: '8px' }}>
-              Historical Case Study
-            </div>
-            <div onClick={() => setPendingScenario(CASE_STUDY_SCENARIO.key)} style={{
-              border: pendingScenario === CASE_STUDY_SCENARIO.key ? '1px solid rgba(255,180,80,0.7)' : '1px solid rgba(255,180,80,0.15)',
-              background: pendingScenario === CASE_STUDY_SCENARIO.key ? 'rgba(255,180,80,0.06)' : 'rgba(255,180,80,0.02)',
-              borderRadius: '4px', padding: '12px 14px', cursor: 'pointer', transition: 'border-color 0.15s ease, background 0.15s ease', marginBottom: '22px',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '4px' }}>
-                <span style={{ fontSize: '11px', fontWeight: 'bold', color: pendingScenario === CASE_STUDY_SCENARIO.key ? '#FFC168' : '#ccc' }}>
-                  {CASE_STUDY_SCENARIO.label}
-                </span>
-                <span style={{ fontSize: '8px', color: 'rgba(255,180,80,0.7)', letterSpacing: '0.1em' }}>
-                  REPLAYS {CASE_STUDY_SCENARIO.citation.incident}
-                </span>
-              </div>
-              <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.45)', lineHeight: 1.5 }}>{CASE_STUDY_SCENARIO.summary}</div>
-            </div>
-
-            <div style={{ marginBottom: '24px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'rgba(255,255,255,0.5)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                <span>Severity</span>
-                <span className={pendingSeverity >= HIGH_RISK_SEVERITY_THRESHOLD ? 'text-red' : 'text-green'} style={{ fontWeight: 'bold' }}>
-                  {pendingSeverity.toFixed(2)} — {pendingSeverity >= HIGH_RISK_SEVERITY_THRESHOLD ? 'MANUAL_INTERLOCK (human approval)' : 'AUTOMATED_GUARDED (auto-executes)'}
-                </span>
-              </div>
-              <input
-                type="range" min="0.3" max="1.0" step="0.05" value={pendingSeverity}
-                onChange={e => setPendingSeverity(parseFloat(e.target.value))}
-                style={{ width: '100%', accentColor: '#EDEEF2' }}
-              />
-            </div>
-
-            <div style={{ display: 'flex', gap: '10px' }}>
-              <button onClick={() => setShowScenarioPicker(false)} style={{
-                flex: 1, padding: '10px', background: 'transparent', border: '1px solid #1f2833', color: '#888',
-                cursor: 'pointer', fontFamily: 'inherit', textTransform: 'uppercase', fontSize: '11px', borderRadius: '4px',
-              }}>
-                Cancel
-              </button>
-              <button onClick={launchScenario} className="action-btn" style={{ flex: 2, marginTop: 0 }}>
-                Launch Scenario
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {scenarioPhase === 'resolved' && activeScenario?.isCaseStudy && (
         <div style={{
@@ -1177,9 +1086,26 @@ function App() {
               </div>
             </BorderGlow>
             <BorderGlow borderRadius={6} glowRadius={16} fillOpacity={0.25} className="trigger-btn-glow">
-              <button onClick={openScenarioPicker} className={`shiny-btn ${isAnomaly ? 'shiny-btn--danger' : ''}`}>
-                {isAnomaly ? 'Reset System' : 'Inject Anomaly'}
-              </button>
+              <div style={{
+                padding: '8px 14px',
+                display: 'flex', alignItems: 'center', gap: '8px',
+                fontSize: '11px', fontWeight: 600, letterSpacing: '0.06em',
+                color: replayAct === 'fault_developing' ? '#FF6B6B'
+                     : replayAct === 'recovery'         ? '#FFB84D'
+                     :                                    '#00E5A0',
+              }}>
+                {/* Pulsing live dot */}
+                <span style={{
+                  width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
+                  background: replayAct === 'fault_developing' ? '#FF6B6B'
+                             : replayAct === 'recovery'         ? '#FFB84D'
+                             :                                    '#00E5A0',
+                  animation: 'pulseGreen 1.4s ease-in-out infinite',
+                }} />
+                {replayAct === 'fault_developing' ? 'FAULT DEVELOPING'
+               : replayAct === 'recovery'         ? 'RECOVERY IN PROGRESS'
+               :                                    'LIVE — NOMINAL MONITORING'}
+              </div>
             </BorderGlow>
           </div>
 

@@ -4,13 +4,16 @@ This document provides a comprehensive overview of the `backend` folder for the 
 
 ## 📂 Directory Structure Overview
 
-The backend is modularized into four primary distinct systems, along with a raw data directory:
+The backend is modularized into several distinct systems, along with data, models, and utility directories:
 
 1. **`sentinel/`**: The Anomaly Detection Pipeline.
 2. **`sherlock/`**: The Root-Cause Diagnosis Agent.
-3. **`oracle/`**: The Safety & Action Evaluation Agent.
-4. **`simulator/`**: The Core Physics and Fault Simulation Engine.
-5. **`data/`**: Raw datasets (e.g., OPSSAT, Mars Express) used for evaluation and training.
+3. **`athena/`**: The Recovery Planning Agent.
+4. **`oracle/`**: The Safety & Action Evaluation Agent.
+5. **`guardian/`**: The Execution Gate.
+6. **`simulator/`**: The Core Physics and Fault Simulation Engine.
+7. **`vitals/`**: Telemetry-based health scoring system.
+8. **`data/`**, **`models/`**, **`results/`**, **`logs/`**: Raw datasets, ML models, evaluation results, and run logs.
 
 ---
 
@@ -59,7 +62,40 @@ The backend is modularized into four primary distinct systems, along with a raw 
 
 ---
 
-## ⚙️ 4. SIMULATOR (Physics & Fault Engine)
+## 🦉 4. ATHENA (Recovery Planning)
+
+**Purpose:** Synthesizes Sherlock's diagnosis and Oracle's validated actions into a human-readable recovery plan.
+
+**Architecture:**
+- Combines ranked options with procedure steps, operator-effort estimates, and a blended recommendation.
+
+**Data Flow:**
+`Sherlock Diagnosis` & `Oracle Response` ➔ `Athena Agent` ➔ `Final Recovery Plan`.
+
+---
+
+## 🛡️ 5. GUARDIAN (Execution Gate)
+
+**Purpose:** The final safety gate before a recovery action is executed.
+
+**Architecture:**
+- Uses deterministic rules (no LLM calls) to synthesize inputs into execution tiers (e.g. time-critical auto-execute vs human-in-the-loop).
+
+**Data Flow:**
+`Diagnosis` + `Recovery Plan` + `Oracle Validation` ➔ `Execution Tier Decision`.
+
+---
+
+## 🩺 6. VITALS (Health Scoring)
+
+**Purpose:** Computes heuristic health scores (0.0 to 1.0) for satellite subsystems (EPS, TCS, ADCS, TTC) based purely on real telemetry values.
+
+**Architecture:**
+- Uses calibrated thresholds against the simulator's behavior to provide a live-demo trigger fallback and system health display.
+
+---
+
+## ⚙️ 7. SIMULATOR (Physics & Fault Engine)
 
 **Purpose:** A synthetic environment that simulates satellite physics, orbital mechanics, and fault injections. Used when real telemetry is unavailable or to stress-test the pipeline.
 
@@ -75,9 +111,11 @@ The backend is modularized into four primary distinct systems, along with a raw 
 
 ## 🔄 End-to-End Data Routing
 
-1. **Telemetry Ingestion:** Data originates either from raw CSVs (`data/raw/opssat/`) or is generated dynamically by the `simulator/`.
+1. **Telemetry Ingestion:** Data originates either from raw CSVs (`data/raw/opssat/`) or is generated dynamically by the `simulator/`. `vitals/` continuously computes subsystem health scores from this telemetry.
 2. **Detection:** Data streams into `sentinel/`. Sentinel computes rolling features and evaluates them against the XGBoost flatline model and the physics-based spike detector.
 3. **Alert Generation:** If Sentinel's combined score crosses the threshold (e.g., `0.5` or `0.8`), an `AnomalyEvent` is triggered.
 4. **Diagnosis:** The `AnomalyEvent` is passed to `sherlock/`. Sherlock queries the dependency graph and raw telemetry surrounding the timestamp to deduce the root cause.
-5. **Mitigation:** Sherlock passes the diagnosis to `oracle/`. Oracle evaluates recovery actions against the current satellite state, scores them for safety, and approves the best mitigation strategy.
-6. **Execution:** In a closed-loop test, Oracle's chosen action is fed back into the `simulator/` (via `recovery.py`) to stabilize the satellite.
+5. **Mitigation Evaluation:** Sherlock passes the diagnosis to `oracle/`. Oracle evaluates recovery actions against the current satellite state and scores them for safety.
+6. **Recovery Planning:** `athena/` synthesizes the diagnosis and Oracle's scored actions into a final, human-readable recovery plan.
+7. **Execution Gate:** `guardian/` takes the plan, diagnosis, and Oracle response, applying deterministic rules to decide execution tiers (e.g., auto-execute or manual review).
+8. **Execution:** In a closed-loop test, the approved action is fed back into the `simulator/` to stabilize the satellite.

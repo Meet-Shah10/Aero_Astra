@@ -5,9 +5,9 @@ Agent 3 of AERO-ASTRA | Root-Cause Diagnosis
 Orchestrates the three-phase diagnosis pipeline:
   Phase 1 (Graph)       — deterministic, no LLM. Computes physically-valid
                           root cause candidates using the dependency graph.
-  Phase 2 (LLM)         — constrained. Gemini (called directly via Google's
-                          genai SDK) reasons over the candidate set and
-                          observed telemetry to produce a JSON diagnosis.
+  Phase 2 (LLM)         — constrained. Claude/Gemini (via OpenRouter) reasons
+                          over the candidate set and observed telemetry to
+                          produce a JSON diagnosis.
   Phase 3 (Validation)  — deterministic, no LLM. Validates that the response
                           is (a) valid JSON, (b) passes Pydantic schema, and
                           (c) the claimed root cause is within the graph
@@ -17,7 +17,7 @@ Orchestrates the three-phase diagnosis pipeline:
 Usage:
     from backend.sherlock import SherlockAgent, AnomalyEvent
 
-    agent = SherlockAgent()  # uses GEMINI_API_KEY env var
+    agent = SherlockAgent()  # uses OPENROUTER_API_KEY env var
     diagnosis = agent.diagnose(event)
     print(diagnosis.model_dump_json(indent=2))
 """
@@ -30,8 +30,8 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
-from google import genai
-from google.genai import types as genai_types
+from openai import OpenAI
+from backend.llm_client import build_clients, call_llm_with_fallback, LLMProvider
 from pydantic import ValidationError
 
 from .graph import SatelliteGraph, DEFAULT_CANDIDATE_DEPTH
@@ -57,11 +57,9 @@ log = logging.getLogger(__name__)
 # Configuration
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Called directly against Google's Gemini API (google-genai SDK) — not
-# routed through OpenRouter. Model id is the native Gemini name (no
-# "google/" provider prefix, that was OpenRouter-routing syntax).
-# Env var: GEMINI_API_KEY
-DEFAULT_MODEL        = "gemini-2.5-flash"
+# Env vars used: OPENROUTER_API_KEY (primary), NVIDIA_API_KEY (fallback)
+# Models: google/gemini-2.5-flash → meta/llama-3.1-70b-instruct
+DEFAULT_MODEL        = "google/gemini-2.5-flash"
 DEFAULT_TEMPERATURE  = 0.1   # Near-deterministic — safety-relevant agent
 DEFAULT_MAX_TOKENS   = 2048              # enough for full SherlockDiagnosis JSON
 DEFAULT_MAX_RETRIES  = 3
@@ -78,8 +76,8 @@ class SherlockAgent:
     Instantiate once and call .diagnose() for each anomaly event.
 
     Args:
-        api_key: Gemini API key. If None, reads GEMINI_API_KEY env var.
-        model: Native Gemini model id. Defaults to 'gemini-2.5-flash'.
+        api_key: OpenRouter API key. If None, reads OPENROUTER_API_KEY env var.
+        model: OpenRouter model id. Defaults to 'google/gemini-2.5-flash'.
         temperature: LLM sampling temperature (0.0–1.0). Default 0.1.
         max_retries: Maximum LLM call attempts before raising SherlockDiagnosisError.
         candidate_depth: Predecessor search depth in the dependency graph.
@@ -94,21 +92,15 @@ class SherlockAgent:
         self,
         api_key: str | None = None,
         model: str = DEFAULT_MODEL,
+        ollama_model: str | None = "llama3.2:3b",
         temperature: float = DEFAULT_TEMPERATURE,
         max_retries: int = DEFAULT_MAX_RETRIES,
         candidate_depth: int = DEFAULT_CANDIDATE_DEPTH,
         telemetry_provider: TelemetryProvider | None = None,
     ) -> None:
-        # Use GEMINI_API_KEY
-        resolved_key = api_key or os.environ.get("GEMINI_API_KEY")
-        if not resolved_key:
-            raise EnvironmentError(
-                "API key not found. Set GEMINI_API_KEY in environment "
-                "or pass api_key= to SherlockAgent()."
-            )
-
-        self._client = genai.Client(api_key=resolved_key)
-        self._model = model
+        # Build multi-provider fallback chain:
+        # OpenRouter (OPENROUTER_API_KEY) → NVIDIA NIM (NVIDIA_API_KEY)
+        self._providers: list[LLMProvider] = build_clients(ollama_model=ollama_model, openrouter_model=model)
         self._temperature = temperature
         self._max_retries = max_retries
         self._candidate_depth = candidate_depth
@@ -116,9 +108,10 @@ class SherlockAgent:
         self._graph = SatelliteGraph()
 
         log.info(
-            "SherlockAgent initialised | model=%s | temp=%.2f | max_retries=%d | depth=%d | via Gemini API (direct)",
-            model, temperature, max_retries, candidate_depth,
+            "SherlockAgent initialised | providers=%s | temp=%.2f | max_retries=%d | depth=%d",
+            [p.name for p in self._providers], temperature, max_retries, candidate_depth,
         )
+
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -269,31 +262,19 @@ class SherlockAgent:
 
     def _call_llm(self, messages: list[dict[str, str]]) -> str:
         """
-        Make one call directly against the Gemini API. Returns raw text.
-
-        The system prompt is passed via system_instruction (Gemini's
-        equivalent of an OpenAI-style role='system' message). Subsequent
-        messages (user / assistant) carry the conversation history across
-        retries so the model sees exactly what it returned previously —
-        'assistant' maps to Gemini's 'model' role.
+        Make one LLM call using the multi-provider fallback chain.
+        OpenRouter is tried first; on 402/429, NVIDIA NIM is used automatically.
         """
-        contents = [
-            genai_types.Content(
-                role="model" if m["role"] == "assistant" else "user",
-                parts=[genai_types.Part(text=m["content"])],
-            )
-            for m in messages
+        full_messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            *messages,
         ]
-        response = self._client.models.generate_content(
-            model=self._model,
-            contents=contents,
-            config=genai_types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                temperature=self._temperature,
-                max_output_tokens=DEFAULT_MAX_TOKENS,
-            ),
+        raw = call_llm_with_fallback(
+            self._providers,
+            full_messages,
+            max_tokens=DEFAULT_MAX_TOKENS,
+            temperature=self._temperature,
         )
-        raw = (response.text or "").strip()
         log.debug("LLM raw response: %s", raw[:300])
         return raw
 

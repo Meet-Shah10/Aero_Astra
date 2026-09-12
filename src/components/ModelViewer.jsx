@@ -463,7 +463,8 @@ const ModelViewer = ({
       <Canvas
         shadows
         frameloop="demand"
-        gl={{ preserveDrawingBuffer: true, alpha: true }}
+        dpr={[1, 1]}
+        gl={{ preserveDrawingBuffer: true, alpha: true, antialias: false, powerPreference: "low-power" }}
         onCreated={({ gl, scene, camera }) => {
           rendererRef.current = gl;
           sceneRef.current = scene;

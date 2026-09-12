@@ -77,9 +77,9 @@ function OrbitItem({ index, totalItems, cx, cy, rx, ry, itemSize, rotation, prog
     >
       <div style={{ transform: `rotate(${-rotation}deg)`, width: '100%', height: '100%' }}>
         <Canvas
-          dpr={[1, 1.5]}
+          dpr={[1, 1]}
           camera={{ position: [0, 0, 1.8], fov: 45 }}
-          gl={{ antialias: true, alpha: true }}
+          gl={{ antialias: false, alpha: true, powerPreference: "low-power" }}
           style={{ width: '100%', height: '100%', background: 'transparent' }}
         >
           <ambientLight intensity={0.8} />

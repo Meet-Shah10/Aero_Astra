@@ -4,8 +4,8 @@ AERO-ASTRA — ATHENA Recovery Planning Agent
 Agent 5 of AERO-ASTRA | Recovery Plan Synthesis
 
 Orchestrates the three-phase planning pipeline:
-  Phase 1 (LLM)         — ATHENA calls Gemini (directly via Google's genai
-                           SDK) with SHERLOCK's diagnosis + ORACLE's
+  Phase 1 (LLM)         — ATHENA calls Claude/Gemini (via OpenRouter)
+                           with SHERLOCK's diagnosis + ORACLE's
                            validated rankings + RECOVERY_CATALOG
                            descriptions. The LLM produces
                            reasoning_cot, overall_reasoning, and 2–3 options
@@ -51,8 +51,8 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
-from google import genai
-from google.genai import types as genai_types
+from openai import OpenAI
+from backend.llm_client import build_clients, call_llm_with_fallback, LLMProvider
 
 from backend.oracle.schemas import OracleResponse
 from backend.sherlock.schemas import SherlockDiagnosis
@@ -80,10 +80,9 @@ log = logging.getLogger(__name__)
 # Configuration
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Called directly against Google's Gemini API (google-genai SDK) — not
-# routed through OpenRouter. Model id is the native Gemini name.
-# Env var: GEMINI_API_KEY
-DEFAULT_MODEL       = "gemini-2.5-flash"
+# Env vars used: OPENROUTER_API_KEY (primary), NVIDIA_API_KEY (fallback)
+# Models: google/gemini-2.5-flash → meta/llama-3.1-70b-instruct
+DEFAULT_MODEL       = "google/gemini-2.5-flash"
 DEFAULT_TEMPERATURE = 0.15
 DEFAULT_MAX_RETRIES = 3
 
@@ -91,8 +90,10 @@ DEFAULT_MAX_RETRIES = 3
 # variation, but this is still safety-relevant; must stay below 0.2.
 DEFAULT_TEMPERATURE = 0.15
 
-# Longer than SHERLOCK: 3 options × ~5 steps + reasoning_cot + narratives
-DEFAULT_MAX_TOKENS  = 2048
+# Kept compact for local Ollama inference (mistral-nemo:12b on M4 is ~1 tok/s).
+# 768 tokens fits 3 recovery options × 3 steps + reasoning without hanging.
+# Cloud models (OpenRouter/NVIDIA) generate this in <5s so no cost to them.
+DEFAULT_MAX_TOKENS  = 768
 DEFAULT_MAX_RETRIES = 3
 
 # Valid operator effort strings (for schema validation)
@@ -111,8 +112,8 @@ class AthenaAgent:
     Instantiate once and call .plan() for each diagnosis+oracle pair.
 
     Args:
-        api_key:     Gemini API key. If None, reads GEMINI_API_KEY env var.
-        model:       Native Gemini model id. Defaults to 'gemini-2.5-flash'.
+        api_key:     OpenRouter API key. If None, reads OPENROUTER_API_KEY env var.
+        model:       OpenRouter model id. Defaults to 'google/gemini-2.5-flash'.
         temperature: LLM sampling temperature (0.0–1.0). Default 0.15.
         max_retries: Maximum LLM call attempts before raising AthenaError.
     """
@@ -121,19 +122,13 @@ class AthenaAgent:
         self,
         api_key: str | None = None,
         model: str = DEFAULT_MODEL,
+        ollama_model: str | None = "mistral-nemo:12b",
         temperature: float = DEFAULT_TEMPERATURE,
         max_retries: int = DEFAULT_MAX_RETRIES,
     ) -> None:
-        # Use GEMINI_API_KEY
-        resolved_key = api_key or os.environ.get("GEMINI_API_KEY")
-        if not resolved_key:
-            raise EnvironmentError(
-                "API key not found. Set GEMINI_API_KEY in environment "
-                "or pass api_key= to AthenaAgent()."
-            )
-
-        self._client = genai.Client(api_key=resolved_key)
-        self._model       = model
+        # Build multi-provider fallback chain:
+        # OpenRouter (OPENROUTER_API_KEY) → NVIDIA NIM (NVIDIA_API_KEY)
+        self._providers: list[LLMProvider] = build_clients(ollama_model=ollama_model, openrouter_model=model)
         self._temperature = temperature
         self._max_retries = max_retries
 
@@ -159,8 +154,8 @@ class AthenaAgent:
             self._rag = None
 
         log.info(
-            "AthenaAgent initialised | model=%s | temp=%.2f | max_retries=%d | rag=%s | via Gemini API (direct)",
-            model, temperature, max_retries, "enabled" if self._rag else "disabled",
+            "AthenaAgent initialised | providers=%s | temp=%.2f | max_retries=%d | rag=%s",
+            [p.name for p in self._providers], temperature, max_retries, "enabled" if self._rag else "disabled",
         )
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -346,30 +341,19 @@ class AthenaAgent:
 
     def _call_llm(self, messages: list[dict[str, str]]) -> str:
         """
-        Make one call directly against the Gemini API. Returns raw text.
-
-        System prompt is passed via system_instruction. Subsequent messages
-        carry the conversation history across retries so the model sees
-        exactly what it returned previously — same pattern as
-        SherlockAgent._call_llm ('assistant' maps to Gemini's 'model' role).
+        Make one LLM call using the multi-provider fallback chain.
+        OpenRouter is tried first; on 402/429, NVIDIA NIM is used automatically.
         """
-        contents = [
-            genai_types.Content(
-                role="model" if m["role"] == "assistant" else "user",
-                parts=[genai_types.Part(text=m["content"])],
-            )
-            for m in messages
+        full_messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            *messages,
         ]
-        response = self._client.models.generate_content(
-            model=self._model,
-            contents=contents,
-            config=genai_types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                temperature=self._temperature,
-                max_output_tokens=DEFAULT_MAX_TOKENS,
-            ),
+        raw = call_llm_with_fallback(
+            self._providers,
+            full_messages,
+            max_tokens=DEFAULT_MAX_TOKENS,
+            temperature=self._temperature,
         )
-        raw = (response.text or "").strip()
         # Strip markdown code fences that Gemini often wraps JSON in
         if raw.startswith("```"):
             # Remove opening fence (```json or ```) and closing fence (```)

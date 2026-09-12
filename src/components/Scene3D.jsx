@@ -68,9 +68,9 @@ export default function Scene3D({ launched, dashboard = false }) {
       background: 'transparent',
     }}>
       <Canvas
-        dpr={[1, 2]}
+        dpr={[1, 1]}
         camera={{ position: [0, 0, 150], fov: 45 }}
-        gl={{ antialias: true, alpha: true }}
+        gl={{ antialias: false, alpha: true, powerPreference: "low-power" }}
         style={{ width: '100%', height: '100%' }}
       >
         <ambientLight intensity={0.1} />

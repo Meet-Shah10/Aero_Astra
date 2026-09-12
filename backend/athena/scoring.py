@@ -79,23 +79,31 @@ def blended_rank(
     Compute ATHENA's blended ranking score for one recovery option.
 
     Formula:
-        rank = (safety * 0.50) + (effectiveness * 0.35) + ((1 / effort_n) * 0.15)
+        rank = (safety_norm * 0.50) + (effectiveness * 0.35) + ((1 / effort_n) * 0.15)
+
+    safety_score is normalised to [0, 1] using Oracle's known SCORE_MIN/MAX
+    (-0.43 to +0.65) rather than raw clamping — this preserves the full
+    differentiation that Oracle's fault-aware affinity scoring produces.
+    Without normalisation, actions with scores 0.48 and 0.47 both clamp to
+    the same value and blended_rank can accidentally flip the order.
 
     Args:
-        safety_score:        ORACLE's safety score for this action. Range [-1, +1].
-                             Clamped to [0, 1] before use — see module docstring.
+        safety_score:        ORACLE's safety score for this action.
+                             Normalised to [0, 1] against SCORE_MIN/MAX before use.
         effectiveness_score: LLM-judged functional recovery quality. Range [0, 1].
                              Clamped defensively.
         operator_effort:     "low" | "medium" | "high". Unknown values default to
-                             "medium" (effort_n=2) rather than raising, to avoid
-                             retries caused by trivial casing issues.
+                             "medium" (effort_n=2) rather than raising.
 
     Returns:
         float in approximately [0.05, 1.0], rounded to 4 decimal places.
-        Higher is better. Negative-safety actions are bounded above by 0.50.
+        Higher is better.
     """
-    # Clamp inputs — safety can be negative from ORACLE's [-1,+1] range
-    s = max(0.0, min(1.0, safety_score))
+    # Import here to avoid circular import; oracle.scoring has no athena dependency
+    from backend.oracle.scoring import SCORE_MIN, SCORE_MAX
+
+    # Normalise safety_score to [0, 1] preserving Oracle's full differentiation
+    s = max(0.0, min(1.0, (safety_score - SCORE_MIN) / (SCORE_MAX - SCORE_MIN)))
     e = max(0.0, min(1.0, effectiveness_score))
     effort_n = EFFORT_NUMERIC.get(operator_effort.lower(), 2)
 
@@ -103,3 +111,4 @@ def blended_rank(
         (s * 0.50) + (e * 0.35) + ((1.0 / effort_n) * 0.15),
         4,
     )
+

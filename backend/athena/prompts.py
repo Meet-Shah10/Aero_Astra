@@ -174,8 +174,24 @@ def _format_oracle_results(oracle_response: OracleResponse) -> str:
     Format ORACLE's ranked results for the prompt. Includes safety_score
     (so the LLM can reference it in reasoning) but does NOT ask the LLM
     to reproduce it in output.
+
+    The ORACLE WINNER line is the most important signal — ATHENA must
+    select it as its primary recommended_action unless there is an explicit
+    mission constraint that contradicts it.
     """
     lines: list[str] = []
+
+    # Prominently declare the Oracle winner at the top
+    if oracle_response.best_action:
+        lines.append(
+            f"  *** ORACLE WINNER (highest safety_score) = \"{oracle_response.best_action}\" ***\n"
+            f"  This is the Monte Carlo-validated best action for this fault.\n"
+            f"  Your recommended_action MUST be \"{oracle_response.best_action}\" unless a specific\n"
+            f"  mission constraint explicitly makes it unsafe."
+        )
+
+    lines.append("")  # blank separator
+
     for i, result in enumerate(oracle_response.results, 1):
         mc = result.mc_result
         catalog_entry = RECOVERY_CATALOG.get(result.action_name)
@@ -185,8 +201,9 @@ def _format_oracle_results(oracle_response: OracleResponse) -> str:
             if catalog_entry else "unknown"
         )
         flags_str = ", ".join(result.flags) if result.flags else "none"
+        winner_tag = " ← ORACLE WINNER" if result.action_name == oracle_response.best_action else ""
         lines.append(
-            f"  [{i}] {result.action_name}\n"
+            f"  [{i}] {result.action_name}{winner_tag}\n"
             f"       safety_score  = {result.safety_score:+.3f}  "
             f"(nominal={mc.nominal_recovery_rate:.1%}, "
             f"degraded={mc.degraded_operation_rate:.1%}, "
@@ -277,11 +294,17 @@ MISSION CONSTRAINTS (qualitative context for your reasoning — not formal limit
 
 INSTRUCTIONS:
 {rag_instruction}  1. Complete reasoning_cot (minimum 2 steps) BEFORE writing options.
-  2. Select 2–3 options from the ORACLE results above. Prefer options with higher
-     safety_score unless mission constraints or effectiveness considerations justify
-     a different order.
-  3. Limit procedure_steps to 3–5 concise steps per option (max 20 words each).
-  4. Do not include safety_score or blended_rank — the system computes these.
+     Use ORACLE's ranked results as strong evidence, but you may disagree if your
+     reasoning_cot clearly explains why a lower-ranked action is more appropriate
+     for this specific fault scenario (e.g., mission constraints, cascade risks).
+  2. Select 2–3 options from the ORACLE results. Your recommended_action will be
+     independently re-validated by Oracle with a deeper Monte Carlo simulation
+     (200 runs, 600 steps) — so reason carefully; the final score will be computed
+     from real physics, not your estimate.
+  3. The ORACLE WINNER is listed above as a strong baseline. Only deviate if
+     your reasoning_cot demonstrates a clear physical justification.
+  4. Limit procedure_steps to 3–5 concise steps per option (max 20 words each).
+  5. Do not include safety_score or blended_rank — the system computes these.
 
 REQUIRED OUTPUT SCHEMA:
 {RESPONSE_JSON_SCHEMA_STR}

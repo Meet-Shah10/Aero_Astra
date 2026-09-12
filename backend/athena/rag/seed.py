@@ -359,26 +359,16 @@ def seed(force_rebuild: bool = False) -> None:
     """
     Seed the ChromaDB vectorstore with the synthetic FDIR knowledge base.
     Bypasses the PDF pipeline — used when NASA-HDBK-1002 PDF is unavailable.
+    Uses local Ollama (nomic-embed-text) for embeddings; falls back to Gemini
+    cloud if Ollama is unavailable.
     """
-    import os
     from backend.athena.rag.pipeline import (
-        AthenaRAGPipeline,
         COLLECTION_NAME,
         VECTORSTORE_DIR,
-        GeminiEmbedder,
+        build_embedder,
+        _save_manifest,
     )
     import chromadb
-
-    api_key = (
-        os.environ.get("GEMINI_API_KEY")
-        or os.environ.get("OPENROUTER_API_KEY")
-    )
-    if not api_key:
-        raise EnvironmentError(
-            "API key not found. Set GEMINI_API_KEY (Google AI Studio) "
-            "or OPENROUTER_API_KEY in environment."
-        )
-
 
     client = chromadb.PersistentClient(path=str(VECTORSTORE_DIR))
     existing = [c.name for c in client.list_collections()]
@@ -401,7 +391,7 @@ def seed(force_rebuild: bool = False) -> None:
     metas = [{"source": "NASA-HDBK-1002-synthetic", "section": entry["section"]} for entry in FDIR_KNOWLEDGE_BASE]
 
     log.info("Embedding %d FDIR knowledge base entries …", len(texts))
-    embedder = GeminiEmbedder()
+    embedder = build_embedder()  # Ollama nomic-embed-text first, Gemini fallback
     vectors = embedder.embed(texts)
 
     collection.upsert(ids=ids, documents=texts, embeddings=vectors, metadatas=metas)
@@ -409,7 +399,6 @@ def seed(force_rebuild: bool = False) -> None:
 
     # Write build manifest so pipeline.is_ready() and build() idempotency gate
     # work correctly whether the KB was loaded from the PDF or via seed.py.
-    from backend.athena.rag.pipeline import _save_manifest
     _save_manifest(doc_count=collection.count())
 
 
