@@ -432,3 +432,93 @@ def run_monte_carlo(
         std_final_battery_soc=float(soc_arr.std()),
         outcome_counts=outcome_counts,
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Public entry point 3: simulate_scenario_stream
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def simulate_scenario_stream(
+    fault: str | None = None,
+    severity: float = 0.7,
+    duration: float = 900.0,
+    dt: float = 5.0,
+    fault_onset: float | None = None,
+    initial_state: SatelliteState | None = None,
+    seed: int | None = None,
+    frame_delay_s: float = 0.0,
+):
+    """
+    Async generator version of simulate_scenario().
+
+    Yields one SimulationFrame per step without collecting all frames in memory.
+    Designed for the /ws/sandbox WebSocket endpoint — callers can push each frame
+    to the client as it is computed instead of waiting for the full run.
+
+    Args:
+        frame_delay_s: Real-time delay (seconds) between frame yields.
+                       0.0 = MAX speed (yield control every 10 steps only).
+                       0.15 = 1x (gentle animated playback).
+                       0.03 = 5x, 0.01 = 10x.
+
+    Yields:
+        SimulationFrame per dt step, from t=0 to t=duration.
+    """
+
+    import asyncio
+
+    if fault is not None and fault not in FAULT_CATALOG:
+        raise ValueError(
+            f"Unknown fault '{fault}'. Valid faults: {sorted(FAULT_CATALOG.keys())}"
+        )
+
+    if fault_onset is None:
+        fault_onset = 0.2 * duration
+
+    state = initial_state if initial_state is not None else _INITIAL_STATE.model_copy(deep=True)
+    orbit = OrbitClock()
+    counters = InternalCounters(heater_on=state.tcs.heater_active)
+    rng = np.random.default_rng(seed)
+
+    t = 0.0
+    steps = int(duration / dt)
+
+    for step_idx in range(steps):
+        yield SimulationFrame(
+            timestamp=t,
+            state=state,
+            fault_active=fault if (fault and t >= fault_onset) else None,
+            fault_onset_time=fault_onset if fault else None,
+        )
+        state = _step(
+            state=state,
+            t=t,
+            dt=dt,
+            orbit=orbit,
+            fault_name=fault,
+            fault_onset=fault_onset,
+            fault_severity=severity,
+            recovery_mods={},
+            counters=counters,
+            rng=rng,
+        )
+        t += dt
+        if frame_delay_s > 0:
+            # Animated playback: sleep between every frame so the client sees
+            # the satellite evolve in slow-motion.  The sleep also yields
+            # event-loop control, so no additional flush is needed.
+            await asyncio.sleep(frame_delay_s)
+        elif step_idx % 10 == 0:
+            # MAX speed: yield event-loop control every 10 steps to prevent
+            # starvation while streaming as fast as Python can compute.
+            await asyncio.sleep(0)
+
+    # Final state
+    yield SimulationFrame(
+        timestamp=t,
+        state=state,
+        fault_active=fault if (fault and t >= fault_onset) else None,
+        fault_onset_time=fault_onset if fault else None,
+    )
+

@@ -3,6 +3,7 @@ import { gsap } from 'gsap';
 import BorderGlow from './BorderGlow';
 import OracleView from './oracle/OracleView.jsx';
 import ResidualChart from './ResidualChart';
+import SandboxPage from './sandbox/SandboxPage.jsx';
 import './AgentDetailPage.css';
 
 // Which BASELINE_TELEMETRY/liveTelemetry row each subsystem's fault shows up
@@ -131,9 +132,9 @@ function SentinelPage({ activeScenario, activeSeverity, isAnomaly, hasIncidentDa
   // visible after it resolves instead of snapping back to baseline —
   // AUTOMATED_GUARDED scenarios auto-resolve in ~5s, too fast to read.
   const metaRows = [
-    { key: '__fault', label: 'active_fault', baseline: 'none', live: hasIncidentData ? activeScenario.faultId : 'none' },
-    { key: '__severity', label: 'severity', baseline: '0.00', live: hasIncidentData ? activeSeverity.toFixed(2) : '0.00' },
-    { key: '__subsystem', label: 'flagged_subsystem', baseline: '—', live: hasIncidentData ? activeScenario.subsystem : '—' },
+    { key: '__fault',     label: 'active_fault',        baseline: 'none', live: hasIncidentData && activeScenario ? activeScenario.faultId   : 'none' },
+    { key: '__severity',  label: 'severity',             baseline: '0.00', live: hasIncidentData && activeSeverity != null ? activeSeverity.toFixed(2) : '0.00' },
+    { key: '__subsystem', label: 'flagged_subsystem',    baseline: '—',    live: hasIncidentData && activeScenario ? activeScenario.subsystem : '—' },
   ];
   const dataRows = TELEMETRY_ROWS.map(row => ({
     key: row.key,
@@ -146,8 +147,10 @@ function SentinelPage({ activeScenario, activeSeverity, isAnomaly, hasIncidentDa
   return (
     <>
       <p className="agent-page-lede">
-        {isAnomaly
+        {isAnomaly && activeScenario
           ? <>Correlation threshold exceeded on <strong>{activeScenario.subsystem}</strong>. Physics digital-twin baseline vs. current live snapshot — changed fields highlighted.</>
+          : isAnomaly
+          ? 'Anomaly detected — awaiting scenario context...'
           : 'All telemetry within baseline range. Snapshots below are identical — no anomaly currently flagged.'}
       </p>
       {liveTm && liveTm.subsystems && (
@@ -209,7 +212,7 @@ const NODE_GAP = 128;
 const NODE_R = 34;
 const GRAPH_W = 340;
 
-function SherlockPage({ activeScenario, isAnomaly, hasIncidentData, liveTelemetry }) {
+function SherlockPage({ activeScenario, isAnomaly, hasIncidentData, liveTelemetry, awaitingActivation, onActivateSherlock, sherlockLoading }) {
   const [selected, setSelected] = useState(0);
   const [replayKey, setReplayKey] = useState(0);
   const nodeRefs = useRef([]);
@@ -249,6 +252,47 @@ function SherlockPage({ activeScenario, isAnomaly, hasIncidentData, liveTelemetr
 
     return () => tl.kill();
   }, [activeScenario, isAnomaly, n, replayKey]);
+
+  // ── Manual activation gate ────────────────────────────────────────────────
+  // awaitingActivation is true when SENTINEL fired but SHERLOCK hasn't run yet.
+  // hasIncidentData is ALSO true at that point (sentinel_alert sets both), so
+  // we must NOT use !hasIncidentData as the guard — just check awaitingActivation.
+  if (awaitingActivation) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 320, gap: 18 }}>
+        <div style={{ color: 'rgba(237,238,242,0.5)', fontSize: 12, letterSpacing: 1, textTransform: 'uppercase' }}>
+          SENTINEL detected an anomaly — SHERLOCK is standing by
+        </div>
+        {sherlockLoading ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: '#52ff52', fontSize: 13 }}>
+            <span style={{ display: 'inline-block', width: 14, height: 14, border: '2px solid #52ff52', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+            SHERLOCK diagnosing…
+          </div>
+        ) : (
+          <button
+            id="btn-activate-sherlock"
+            onClick={onActivateSherlock}
+            style={{
+              background: 'rgba(82,255,82,0.12)',
+              border: '1px solid rgba(82,255,82,0.6)',
+              color: '#52ff52',
+              borderRadius: 8,
+              padding: '10px 28px',
+              fontSize: 13,
+              fontFamily: 'var(--font-mono)',
+              letterSpacing: 1,
+              cursor: 'pointer',
+              transition: 'background 0.2s',
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = 'rgba(82,255,82,0.22)'}
+            onMouseLeave={e => e.currentTarget.style.background = 'rgba(82,255,82,0.12)'}
+          >
+            ▶ Activate SHERLOCK
+          </button>
+        )}
+      </div>
+    );
+  }
 
   if (!hasIncidentData || !activeScenario) {
     return <Empty label="Awaiting fault trigger — nothing to diagnose yet." />;
@@ -366,9 +410,51 @@ function OraclePage({ hasIncidentData, backendOnline, backendData }) {
   );
 }
 
-function AthenaPage({ hasIncidentData, scenarioPhase, selectedMitigation, setSelectedMitigation, backendOnline, backendData }) {
+function AthenaPage({ hasIncidentData, scenarioPhase, selectedMitigation, setSelectedMitigation, backendOnline, backendData, sherlockDone, onActivateAthena, athenaLoading }) {
   if (!hasIncidentData) return <Empty label="No mitigation required." />;
   const ready = scenarioPhase === 'planning' || scenarioPhase === 'awaiting_approval' || scenarioPhase === 'executing' || scenarioPhase === 'resolved';
+
+  // ── Manual activation gate ────────────────────────────────────────────────
+  // sherlockDone=true after SHERLOCK runs. guardian_action immediately advances
+  // scenarioPhase to 'awaiting_approval' so ready=true at that point too —
+  // we CANNOT use !ready as the guard. Check !backendData?.athena instead.
+  if (sherlockDone && !backendData?.athena) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 320, gap: 18 }}>
+        <div style={{ color: 'rgba(237,238,242,0.5)', fontSize: 12, letterSpacing: 1, textTransform: 'uppercase' }}>
+          SHERLOCK diagnosis complete — ATHENA is standing by
+        </div>
+        {athenaLoading ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: '#7eb8ff', fontSize: 13 }}>
+            <span style={{ display: 'inline-block', width: 14, height: 14, border: '2px solid #7eb8ff', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+            ORACLE simulating + ATHENA planning…
+          </div>
+        ) : (
+          <button
+            id="btn-activate-athena"
+            onClick={onActivateAthena}
+            style={{
+              background: 'rgba(126,184,255,0.12)',
+              border: '1px solid rgba(126,184,255,0.6)',
+              color: '#7eb8ff',
+              borderRadius: 8,
+              padding: '10px 28px',
+              fontSize: 13,
+              fontFamily: 'var(--font-mono)',
+              letterSpacing: 1,
+              cursor: 'pointer',
+              transition: 'background 0.2s',
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = 'rgba(126,184,255,0.22)'}
+            onMouseLeave={e => e.currentTarget.style.background = 'rgba(126,184,255,0.12)'}
+          >
+            ▶ Activate ATHENA
+          </button>
+        )}
+      </div>
+    );
+  }
+
   if (!ready) return <Empty label="Waiting for SHERLOCK diagnosis before options can be generated..." />;
   const athena = backendOnline ? backendData?.athena : null;
   if (!athena) return <Empty label="Waiting for ORACLE simulation before ATHENA can plan..." />;
@@ -618,14 +704,15 @@ function VitalsPage({ isAnomaly, backendOnline, backendData }) {
 }
 
 const AGENT_META = {
-  SENTINEL: { role: 'The Early Warning System' },
-  SHERLOCK: { role: 'The Detective' },
-  ORACLE: { role: 'The Simulator' },
-  ATHENA: { role: 'The Strategist' },
-  GUARDIAN: { role: 'The Safety Gate' },
-  SCRIBE: { role: 'The Accountant' },
+  SENTINEL:  { role: 'The Early Warning System' },
+  SHERLOCK:  { role: 'The Detective' },
+  ORACLE:    { role: 'The Simulator' },
+  ATHENA:    { role: 'The Strategist' },
+  GUARDIAN:  { role: 'The Safety Gate' },
+  SCRIBE:    { role: 'The Accountant' },
   CHRONICLE: { role: 'The Live Log' },
-  VITALS: { role: 'The Proactive Monitor' },
+  VITALS:    { role: 'The Proactive Monitor' },
+  SANDBOX:   { role: 'The Digital Twin' },
 };
 
 export default function AgentDetailPage({ agent, ...props }) {
@@ -640,6 +727,15 @@ export default function AgentDetailPage({ agent, ...props }) {
     );
   }
 
+  // SANDBOX owns its full layout — 3-column grid, no standard header/body
+  if (agent === 'SANDBOX') {
+    return (
+      <div className="agent-page agent-page--oracle fade-enter">
+        <SandboxPage {...props} />
+      </div>
+    );
+  }
+
   return (
     <div className="agent-page fade-enter">
       <div className="agent-page-header">
@@ -647,14 +743,14 @@ export default function AgentDetailPage({ agent, ...props }) {
         <div className="agent-page-role">{meta?.role}</div>
       </div>
       <div className={`agent-page-body ${agent === 'SENTINEL' || agent === 'SHERLOCK' ? '' : 'agent-page-body--narrow'}`}>
-        {agent === 'SENTINEL' && <SentinelPage {...props} />}
-        {agent === 'SHERLOCK' && <SherlockPage {...props} />}
+        {agent === 'SENTINEL'  && <SentinelPage  {...props} />}
+        {agent === 'SHERLOCK'  && <SherlockPage  {...props} />}
 
-        {agent === 'ATHENA' && <AthenaPage {...props} />}
-        {agent === 'GUARDIAN' && <GuardianPage {...props} />}
-        {agent === 'SCRIBE' && <ScribePage {...props} />}
+        {agent === 'ATHENA'    && <AthenaPage    {...props} />}
+        {agent === 'GUARDIAN'  && <GuardianPage  {...props} />}
+        {agent === 'SCRIBE'    && <ScribePage    {...props} />}
         {agent === 'CHRONICLE' && <ChroniclePage {...props} />}
-        {agent === 'VITALS' && <VitalsPage {...props} />}
+        {agent === 'VITALS'    && <VitalsPage    {...props} />}
       </div>
     </div>
   );

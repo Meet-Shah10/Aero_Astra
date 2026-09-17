@@ -31,7 +31,9 @@ const AGENT_ROSTER = [
   { code: 'GUARDIAN', role: 'The Safety Gate', desc: 'Low-risk fixes auto-execute and log themselves. High-risk fixes wait for a human to press approve — nothing executes without it.', status: 'wired' },
   { code: 'SCRIBE', role: 'The Accountant', desc: "Every decision, every step, every agent's reasoning gets written into an audit trail automatically.", status: 'planned' },
   { code: 'VITALS', role: 'The Proactive Monitor', desc: 'Tracks subsystem health scores and remaining-useful-life estimates so degradation is visible before it becomes an anomaly.', status: 'wired' },
+  { code: 'SANDBOX', role: 'The Digital Twin', desc: 'Run any fault scenario with full physics, watch it play out frame-by-frame on live charts and a wired 3D model, and compare two satellite configs side-by-side.', status: 'wired' },
 ];
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Fault scenario catalog — the 3 faults verified to produce a real, visible
@@ -50,7 +52,7 @@ const FAULT_SCENARIOS = {
     summary: 'Heat pipe failure — panel temperature climbs unbounded toward thermal limits.',
     rootCause: 'Heat Pipe Failure (TCS)',
     causalChain: ['TCS', 'ADCS', 'EPS'],
-    liveOverride: { tcsTemp: '76.3°C (+4.2°C/hr)', cpuUsage: '58%', epsLoad: '44%' },
+    liveOverride: { tcsPanel: '76.3°C (+4.2°C/hr)', cpuUsage: '58%', epsLoad: '44%' },
   },
   signal_dropout: {
     key: 'signal_dropout',
@@ -70,7 +72,7 @@ const FAULT_SCENARIOS = {
     summary: 'Thruster valve misfire generates uncontrolled torque and heat.',
     rootCause: 'Valve Misfire (Propulsion)',
     causalChain: ['Propulsion', 'ADCS', 'TCS'],
-    liveOverride: { tcsTemp: '61.8°C (+9.1°C/hr)', cpuUsage: '81%', epsLoad: '68%' },
+    liveOverride: { tcsPanel: '61.8°C (+9.1°C/hr)', cpuUsage: '81%', epsLoad: '68%' },
   },
   cascade_power_failure: {
     key: 'cascade_power_failure',
@@ -80,7 +82,7 @@ const FAULT_SCENARIOS = {
     summary: 'Solar array loss drops output to zero — battery drains under full load with no recharge path.',
     rootCause: 'Solar Array Loss (EPS)',
     causalChain: ['EPS', 'TCS', 'ADCS', 'OBC', 'TT&C'],
-    liveOverride: { epsLoad: '97%', tcsTemp: '31.4°C (falling)', cpuUsage: '74%' },
+    liveOverride: { epsLoad: '97%', tcsPanel: '31.4°C (falling)', cpuUsage: '74%' },
   },
 };
 
@@ -128,18 +130,29 @@ const ANOMALY_FOCUS = {
 const BASELINE_TELEMETRY = {
   altitude: '540 km | 7.5 km/s',
   epsLoad: '32%',
+  epsSolar: '8.0 A',
+  tcsPanel: 'Nominal',
+  tcsBatt: 'Nominal',
   cpuUsage: '14%',
+  obcMemory: 'Nominal',
   commLink: 'Stable',
-  tcsTemp: 'Nominal',
+  ttcBer: '< 1e-6',
+  propMass: 'Nominal',
 };
 
 const TELEMETRY_ROWS = [
   { key: 'altitude', label: 'Altitude / Velocity' },
-  { key: 'epsLoad', label: 'EPS Load' },
-  { key: 'cpuUsage', label: 'CPU Usage' },
+  { key: 'epsLoad', label: 'EPS Battery' },
+  { key: 'epsSolar', label: 'Solar Current' },
+  { key: 'tcsPanel', label: 'Panel Temp' },
+  { key: 'tcsBatt', label: 'Batt Temp' },
+  { key: 'cpuUsage', label: 'CPU Load' },
+  { key: 'obcMemory', label: 'OBC Memory' },
   { key: 'commLink', label: 'Comm-Link' },
-  { key: 'tcsTemp', label: 'TCS Temp' },
+  { key: 'ttcBer', label: 'Bit Error Rate' },
+  { key: 'propMass', label: 'Propellant' },
 ];
+
 
 // Severity below this auto-executes (AUTOMATED_GUARDED); at/above it, GUARDIAN
 // requires a human approval click (MANUAL_INTERLOCK). See roadmap.md's MVP
@@ -295,6 +308,12 @@ function App() {
   const [scenarioPhase, setScenarioPhase] = useState('nominal');
   const [guardianApproved, setGuardianApproved] = useState(false);
   const [selectedMitigation, setSelectedMitigation] = useState(1);
+
+  // Manual agent activation state
+  const [awaitingActivation, setAwaitingActivation] = useState(false); // SENTINEL fired, SHERLOCK not yet run
+  const [sherlockDone, setSherlockDone] = useState(false);             // SHERLOCK done, ATHENA not yet run
+  const [sherlockLoading, setSherlockLoading] = useState(false);
+  const [athenaLoading, setAthenaLoading] = useState(false);
   const [logs, setLogs] = useState([
     '> System booted successfully.',
     '> Telemetry linked on band S7.',
@@ -409,7 +428,7 @@ function App() {
                     .reduce((a, b) => (msg.payload[a] ?? 1) <= (msg.payload[b] ?? 1) ? a : b)
                     .replace('_health', '').toUpperCase();
                   setLogs(prev => [...prev,
-                    `> ⚠ VITALS: ${subsystem} health crossed below warning threshold (${(worst * 100).toFixed(0)}%).`,
+                  `> ⚠ VITALS: ${subsystem} health crossed below warning threshold (${(worst * 100).toFixed(0)}%).`,
                   ]);
                 } else if (prevWorst < 0.85 && worst >= 0.85) {
                   setLogs(prev => [...prev, `> VITALS: All subsystems back above threshold (worst ${(worst * 100).toFixed(0)}%).`]);
@@ -436,7 +455,7 @@ function App() {
               setActiveSeverity(msg.severity);
               setReplayAct('nominal');
               setLogs(prev => [...prev,
-                `> REPLAY: Starting autonomous loop — ${msg.label} (severity ${msg.severity.toFixed(2)})`,
+              `> REPLAY: Starting autonomous loop — ${msg.label} (severity ${msg.severity.toFixed(2)})`,
                 '> SENTINEL: Monitoring telemetry stream for anomalies...',
               ]);
               break;
@@ -446,7 +465,7 @@ function App() {
               // nominal monitoring display while the next loop loads.
               setReplayAct('nominal');
               setLogs(prev => [...prev,
-                `> REPLAY: Loop ${msg.loop_index + 1} complete (${msg.label}). Resetting for next scenario...`,
+              `> REPLAY: Loop ${msg.loop_index + 1} complete (${msg.label}). Resetting for next scenario...`,
                 '> System nominal. Next fault cycle starting...',
               ]);
               // Give the log a moment to read, then reset incident state.
@@ -470,9 +489,12 @@ function App() {
               setBackendData(prev => ({ ...prev, sentinel: msg }));
               setScenarioPhase('detected');
               setReplayAct('fault_developing');
+              setAwaitingActivation(true);   // SHERLOCK button now shows
+              setSherlockDone(false);
               setLogs(prev => [...prev,
-                `> ⚠ SENTINEL: Anomaly detected via ${msg.triggered_engine}` +
-                (msg.fault_label ? ` — ${msg.fault_label}` : ''),
+              `> ⚠ SENTINEL: Anomaly detected via ${msg.triggered_engine}` +
+              (msg.fault_label ? ` — ${msg.fault_label}` : ''),
+              '> SHERLOCK + ATHENA awaiting manual activation.',
               ]);
               break;
             case 'residual_update':
@@ -485,33 +507,33 @@ function App() {
               setBackendData(prev => ({ ...prev, sherlock: msg }));
               setScenarioPhase(p => (p === 'detected' || p === 'nominal') ? 'diagnosing' : p);
               setLogs(prev => [...prev,
-                `> SHERLOCK: Root cause → ${msg.primary_root_cause}`,
-                `> SHERLOCK: Urgency ${msg.urgency}, TTC ${msg.time_to_critical}min`,
+              `> SHERLOCK: Root cause → ${msg.primary_root_cause}`,
+              `> SHERLOCK: Urgency ${msg.urgency}, TTC ${msg.time_to_critical}min`,
               ]);
               break;
             case 'oracle_simulation':
               setBackendData(prev => ({ ...prev, oracle: msg }));
               setScenarioPhase(p => (p === 'diagnosing' || p === 'detected') ? 'planning' : p);
               setLogs(prev => [...prev,
-                `> ORACLE Phase 1: Best action → ${msg.best_action} (score ${msg.top_score?.toFixed(2)})`,
+              `> ORACLE Phase 1: Best action → ${msg.best_action} (score ${msg.top_score?.toFixed(2)})`,
               ]);
               break;
             case 'oracle_validation_start':
               setLogs(prev => [...prev,
-                `> ORACLE Phase 2: Validating ATHENA's pick → "${msg.action}" (200 runs, deeper MC)...`,
+              `> ORACLE Phase 2: Validating ATHENA's pick → "${msg.action}" (200 runs, deeper MC)...`,
               ]);
               break;
             case 'oracle_validation':
               setBackendData(prev => ({ ...prev, oracleValidation: msg }));
               setLogs(prev => [...prev,
-                `> ORACLE Phase 2: "${msg.action_name}" validated | score=${msg.safety_score?.toFixed(3)} | prob=${Math.round((msg.success_probability ?? 0) * 100)}%` +
-                (msg.athena_agreed ? '' : ` | ATHENA differed from Oracle Phase 1 winner "${msg.phase1_oracle_winner}"`),
+              `> ORACLE Phase 2: "${msg.action_name}" validated | score=${msg.safety_score?.toFixed(3)} | prob=${Math.round((msg.success_probability ?? 0) * 100)}%` +
+              (msg.athena_agreed ? '' : ` | ATHENA differed from Oracle Phase 1 winner "${msg.phase1_oracle_winner}"`),
               ]);
               break;
             case 'athena_plan':
               setBackendData(prev => ({ ...prev, athena: msg }));
               setLogs(prev => [...prev,
-                `> ATHENA: Plan → ${msg.recommended_action}`,
+              `> ATHENA: Plan → ${msg.recommended_action}`,
               ]);
               break;
 
@@ -533,14 +555,26 @@ function App() {
                 setTimeout(() => executeRunbook(activeScenarioRef.current), 300);
               }
               break;
+            case 'awaiting_activation':
+              // Sent by backend when anomaly is stored and waiting for manual SHERLOCK trigger
+              setAwaitingActivation(true);
+              break;
+            case 'sherlock_done':
+              // SHERLOCK completed — enable the ATHENA button
+              setSherlockLoading(false);
+              setSherlockDone(true);
+              setAwaitingActivation(false);
+              break;
             default:
               break;
           }
-        } catch (_) {}
+        } catch (_) { }
       };
 
       ws.onclose = () => {
         setBackendOnline(false);
+        setAwaitingActivation(false);
+        setSherlockDone(false);
         // Auto-reconnect fast — was 3s, which reads as a long, alarming
         // "OFFLINE" window on-screen for what's usually a dev-server reload
         // blip lasting well under a second.
@@ -558,7 +592,7 @@ function App() {
       clearTimeout(reconnectTimer);
       if (wsRef.current) wsRef.current.close();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Launch sequence ──
@@ -707,13 +741,24 @@ function App() {
   //   2. liveOverride mock strings from FAULT_SCENARIOS when backend is offline.
   //   3. BASELINE_TELEMETRY as the no-fault baseline.
   const _wsTm = backendOnline ? backendData?.telemetry : null;
-  const _realTelemetry = _wsTm ? {
-    altitude: '540 km | 7.5 km/s',  // orbit is not in the WS payload, keep static
-    epsLoad: `${(_wsTm.subsystems.EPS.battery_soc * 100).toFixed(1)}% SOC · ${_wsTm.subsystems.EPS.bus_voltage.toFixed(1)}V`,
-    cpuUsage: BASELINE_TELEMETRY.cpuUsage,  // OBC cpu not in WS subset, keep baseline
-    commLink: BASELINE_TELEMETRY.commLink,  // TTC not in WS subset, keep baseline
-    tcsTemp: BASELINE_TELEMETRY.tcsTemp,   // TCS not in WS subset, keep baseline
+  const _ss = _wsTm?.subsystems;
+  const _realTelemetry = _ss ? {
+    altitude: '540 km | 7.5 km/s',   // orbit is not in the WS payload, keep static
+    epsLoad: `${(_ss.EPS.battery_soc * 100).toFixed(1)}% SOC · ${_ss.EPS.bus_voltage.toFixed(1)}V`,
+    epsSolar: `${_ss.EPS.solar_array_current?.toFixed(2) ?? '—'} A`,
+    tcsPanel: `${_ss.TCS.panel_temp?.toFixed(1) ?? '—'}°C${_ss.TCS.heater_on ? ' [HTR ON]' : ''}`,
+    tcsBatt: `${_ss.TCS.battery_temp?.toFixed(1) ?? '—'}°C`,
+    cpuUsage: `${(_ss.OBC.cpu_load * 100)?.toFixed(1) ?? '—'}%`,
+    obcMemory: `${_ss.OBC.memory_used_pct?.toFixed(1) ?? '—'}%`,
+    commLink: _ss.TTC.signal_strength != null
+      ? `${_ss.TTC.signal_strength.toFixed(1)} dBm`
+      : BASELINE_TELEMETRY.commLink,
+    ttcBer: _ss.TTC.bit_error_rate != null
+      ? (_ss.TTC.bit_error_rate < 1e-5 ? '< 1e-5' : _ss.TTC.bit_error_rate.toExponential(2))
+      : BASELINE_TELEMETRY.ttcBer,
+    propMass: `${_ss.PROP.fuel_remaining?.toFixed(2) ?? '—'} kg`,
   } : null;
+
   const liveTelemetry = _realTelemetry
     ? { ...BASELINE_TELEMETRY, ..._realTelemetry, ...(isAnomaly ? activeScenario?.liveOverride : null) }
     : { ...BASELINE_TELEMETRY, ...(isAnomaly ? activeScenario?.liveOverride : null) };
@@ -812,484 +857,506 @@ function App() {
               items={navItems}
             />
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
-            <div style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: '8px', letterSpacing: '0.15em', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', fontWeight: 'bold' }}>UTC TIME</div>
-              <div style={{ fontFamily: 'monospace', fontSize: '13px', fontWeight: 'bold', color: '#EDEEF2', letterSpacing: '0.1em' }}><LiveClock /></div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: '8px', letterSpacing: '0.15em', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', fontWeight: 'bold' }}>UTC TIME</div>
+                <div style={{ fontFamily: 'monospace', fontSize: '13px', fontWeight: 'bold', color: '#EDEEF2', letterSpacing: '0.1em' }}><LiveClock /></div>
+              </div>
             </div>
           </div>
-        </div>
 
           {/* Row 2 — breadcrumb + MET */}
-      <div style={{
-        height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '0 32px', background: 'rgba(0,0,0,0.2)',
-      }}>
-        <div style={{ fontSize: '9px', fontFamily: 'monospace', letterSpacing: '0.1em', color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase' }}>
-          MISSION CONTROL / {activeView === 'about' ? 'ABOUT' : 'DASHBOARD'} / <span style={{ color: '#EDEEF2', fontWeight: 'bold' }}>{activeView === 'about' ? 'AGENT ARCHITECTURE' : 'ANOMALY RESPONSE'}</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: '#00FF88', fontFamily: 'monospace', fontWeight: 'bold' }}>
-          <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#00FF88', display: 'inline-block', animation: 'blink-dots 1.5s infinite' }} />
-          {missionStart && <MetTimer start={missionStart} />}
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '9px', color: 'rgba(255,255,255,0.5)', fontFamily: 'monospace' }}>
-          SIGNAL: <span style={{ color: '#00FF88', fontWeight: 'bold' }}>LINK_NOMINAL</span>
-          &nbsp;|&nbsp;
-          BACKEND: <span style={{ color: backendOnline ? '#00FF88' : '#FFC168', fontWeight: 'bold' }}>
-            {backendOnline ? '● LIVE' : '○ RECONNECTING'}
-          </span>
-        </div>
-      </div>
-    </header>
-  ) : (
-    /* Landing / Loader header — exactly matching orbital-tomb */
-    <header style={{
-      position: 'fixed', top: 0, left: 0, right: 0, height: '64px', zIndex: 40,
-      background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(8px)',
-      borderBottom: '1px solid rgba(255,255,255,0.07)',
-      display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px',
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#EDEEF2" strokeWidth="1.5">
-          <circle cx="12" cy="12" r="10" />
-          <polygon points="12,6 6,16 18,16" strokeLinejoin="round" />
-        </svg>
-        <span style={{ fontSize: '10px', letterSpacing: '0.25em', color: 'rgba(255,255,255,0.4)', fontWeight: 'bold', textTransform: 'uppercase' }}>
-          SEC_LEVEL // 04
-        </span>
-      </div>
+          <div style={{
+            height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '0 32px', background: 'rgba(0,0,0,0.2)',
+          }}>
+            <div style={{ fontSize: '9px', fontFamily: 'monospace', letterSpacing: '0.1em', color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase' }}>
+              MISSION CONTROL / {activeView === 'about' ? 'ABOUT' : 'DASHBOARD'} / <span style={{ color: '#EDEEF2', fontWeight: 'bold' }}>{activeView === 'about' ? 'AGENT ARCHITECTURE' : 'ANOMALY RESPONSE'}</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: '#00FF88', fontFamily: 'monospace', fontWeight: 'bold' }}>
+              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#00FF88', display: 'inline-block', animation: 'blink-dots 1.5s infinite' }} />
+              {missionStart && <MetTimer start={missionStart} />}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '9px', color: 'rgba(255,255,255,0.5)', fontFamily: 'monospace' }}>
+              SIGNAL: <span style={{ color: '#00FF88', fontWeight: 'bold' }}>LINK_NOMINAL</span>
+              &nbsp;|&nbsp;
+              BACKEND: <span style={{ color: backendOnline ? '#00FF88' : '#FFC168', fontWeight: 'bold' }}>
+                {backendOnline ? '● LIVE' : '○ RECONNECTING'}
+              </span>
+            </div>
+          </div>
+        </header>
+      ) : (
+        /* Landing / Loader header — exactly matching orbital-tomb */
+        <header style={{
+          position: 'fixed', top: 0, left: 0, right: 0, height: '64px', zIndex: 40,
+          background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(8px)',
+          borderBottom: '1px solid rgba(255,255,255,0.07)',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#EDEEF2" strokeWidth="1.5">
+              <circle cx="12" cy="12" r="10" />
+              <polygon points="12,6 6,16 18,16" strokeLinejoin="round" />
+            </svg>
+            <span style={{ fontSize: '10px', letterSpacing: '0.25em', color: 'rgba(255,255,255,0.4)', fontWeight: 'bold', textTransform: 'uppercase' }}>
+              SEC_LEVEL // 04
+            </span>
+          </div>
 
-      <h1 style={{ margin: 0, fontSize: 'clamp(14px,1.5vw,18px)', letterSpacing: '0.3em', fontWeight: 'bold', color: '#fff' }}>
-        AERO-ASTRA
-      </h1>
+          <h1 style={{ margin: 0, fontSize: 'clamp(14px,1.5vw,18px)', letterSpacing: '0.3em', fontWeight: 'bold', color: '#fff' }}>
+            AERO-ASTRA
+          </h1>
 
-      <div style={{ textAlign: 'right' }}>
-        <div style={{ fontSize: '8px', letterSpacing: '0.15em', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', fontWeight: 'bold' }}>
-          COORDINATED UNIVERSAL TIME
-        </div>
-        <div style={{ fontFamily: 'monospace', fontSize: '14px', fontWeight: 'bold', color: '#EDEEF2', letterSpacing: '0.1em' }}>
-          <LiveClock />
-        </div>
-      </div>
-    </header>
-  )
-}
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: '8px', letterSpacing: '0.15em', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', fontWeight: 'bold' }}>
+              COORDINATED UNIVERSAL TIME
+            </div>
+            <div style={{ fontFamily: 'monospace', fontSize: '14px', fontWeight: 'bold', color: '#EDEEF2', letterSpacing: '0.1em' }}>
+              <LiveClock />
+            </div>
+          </div>
+        </header>
+      )
+      }
 
-{/* ════════════════════════════════════════════
+      {/* ════════════════════════════════════════════
           VIEW 1 — HERO (landing, globe visible behind)
          ════════════════════════════════════════════ */}
-{
-  !launched && (
-    <main className="landing-main" style={{ zIndex: 20 }}>
-      <div className="hero-tag">AUTONOMOUS SATELLITE MISSION OPS</div>
+      {
+        !launched && (
+          <main className="landing-main" style={{ zIndex: 20 }}>
+            <div className="hero-tag">AUTONOMOUS SATELLITE MISSION OPS</div>
 
-      <h2 className="hero-title">AERO-ASTRA</h2>
+            <h2 className="hero-title">AERO-ASTRA</h2>
 
-      <p className="hero-sub">Intelligent multi-agent AI for autonomous anomaly response.</p>
+            <p className="hero-sub">Intelligent multi-agent AI for autonomous anomaly response.</p>
 
-      <div className="hero-status">
-        TELEMETRY SYNCED &middot; MULTI-AGENT ACTIVE &middot; OPSSAT-AD LIVE
-      </div>
+            <div className="hero-status">
+              TELEMETRY SYNCED &middot; MULTI-AGENT ACTIVE &middot; OPSSAT-AD LIVE
+            </div>
 
-      <BorderGlow borderRadius={4} glowRadius={26} fillOpacity={0.25} className="launch-btn-glow">
-        <button className="launch-btn cursor-target" onClick={handleLaunch} id="launch-mission-control">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0 }}>
-            <circle cx="12" cy="12" r="10" />
-            <line x1="22" y1="12" x2="18" y2="12" />
-            <line x1="6" y1="12" x2="2" y2="12" />
-            <line x1="12" y1="6" x2="12" y2="2" />
-            <line x1="12" y1="22" x2="12" y2="18" />
-          </svg>
-          LAUNCH MISSION CONTROL
-        </button>
-      </BorderGlow>
-      
-      <TargetCursor targetSelector=".cursor-target" cursorColor="#EDEEF2" cursorColorOnTarget="#00FF88" spinDuration={2} />
+            <BorderGlow borderRadius={4} glowRadius={26} fillOpacity={0.25} className="launch-btn-glow">
+              <button className="launch-btn cursor-target" onClick={handleLaunch} id="launch-mission-control">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0 }}>
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="22" y1="12" x2="18" y2="12" />
+                  <line x1="6" y1="12" x2="2" y2="12" />
+                  <line x1="12" y1="6" x2="12" y2="2" />
+                  <line x1="12" y1="22" x2="12" y2="18" />
+                </svg>
+                LAUNCH MISSION CONTROL
+              </button>
+            </BorderGlow>
 
-      {/* Coordinate corner decoration */}
-      <div style={{
-        position: 'absolute', bottom: '2rem', left: '2.5rem',
-        fontFamily: 'monospace', fontSize: '8px', color: 'rgba(255,255,255,0.2)',
-        letterSpacing: '0.15em', lineHeight: 1.8,
-      }}>
-        <div>LAT: 28.6139° N</div>
-        <div>LON: 77.2090° E</div>
-        <div>ALT: 540 KM</div>
-      </div>
-    </main>
-  )
-}
+            <TargetCursor targetSelector=".cursor-target" cursorColor="#EDEEF2" cursorColorOnTarget="#00FF88" spinDuration={2} />
 
-{/* ════════════════════════════════════════════
+            {/* Coordinate corner decoration */}
+            <div style={{
+              position: 'absolute', bottom: '2rem', left: '2.5rem',
+              fontFamily: 'monospace', fontSize: '8px', color: 'rgba(255,255,255,0.2)',
+              letterSpacing: '0.15em', lineHeight: 1.8,
+            }}>
+              <div>LAT: 28.6139° N</div>
+              <div>LON: 77.2090° E</div>
+              <div>ALT: 540 KM</div>
+            </div>
+          </main>
+        )
+      }
+
+      {/* ════════════════════════════════════════════
           VIEW 2 — LOADER PANEL
           (shown while camera dollies in, sat GLB pops)
          ════════════════════════════════════════════ */}
-{
-  launched && !showDashboard && showLoader && (
-    <div style={{
-      position: 'fixed', inset: 0, zIndex: 30,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-    }}>
-      {/* No foreground model here — the persistent Scene3D globe (already
+      {
+        launched && !showDashboard && showLoader && (
+          <div style={{
+            position: 'fixed', inset: 0, zIndex: 30,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            {/* No foreground model here — the persistent Scene3D globe (already
           dollying in behind everything) is the visual during this phase. */}
 
-      {/* Loading panel at bottom */}
-      <div style={{
-        position: 'absolute', bottom: '3rem', left: '50%', transform: 'translateX(-50%)',
-        width: '100%', maxWidth: '540px', zIndex: 10,
-      }}>
-        <div className="transition-panel">
-          {/* Spinner */}
-          <div style={{ position: 'relative', width: '48px', height: '48px', margin: '0 auto 20px' }}>
-            <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', border: '1px solid rgba(255,255,255,0.05)' }} />
-            <div className="spin-ring" />
-          </div>
-
-          <div style={{ fontSize: '10px', letterSpacing: '0.3em', color: '#EDEEF2', textTransform: 'uppercase', fontWeight: 'bold', marginBottom: '6px' }}>
-            INITIALIZING MISSION CONTROL...
-          </div>
-          <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginBottom: '16px' }}>
-            Multi-agent anomaly response system coming online
-          </div>
-
-          {/* Sequential log messages */}
-          <div className="transition-log">
-            {loadMessages.slice(0, loadStep).map((msg, i) => (
-              <div key={i} style={{
-                color: i === loadStep - 1 ? '#EDEEF2' : 'rgba(230,232,236,0.4)',
-                marginBottom: '3px', fontSize: '10px', fontFamily: 'monospace', letterSpacing: '0.08em',
-              }}>
-                {i < loadStep - 1 && <span style={{ color: '#00FF88', marginRight: '4px' }}>✓</span>}
-                {i === loadStep - 1 && <span style={{ color: '#EDEEF2', marginRight: '4px' }} className="dot-blink">▸</span>}
-                {msg}
-              </div>
-            ))}
-          </div>
-
-          {/* Progress bar */}
-          <div style={{ width: '100%', height: '2px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', marginTop: '14px', overflow: 'hidden' }}>
+            {/* Loading panel at bottom */}
             <div style={{
-              height: '100%',
-              width: `${(loadStep / loadMessages.length) * 100}%`,
-              background: 'linear-gradient(90deg, #EDEEF2, #00FF88)',
-              transition: 'width 0.4s ease',
-              boxShadow: '0 0 8px rgba(230,232,236,0.5)',
-            }} />
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
+              position: 'absolute', bottom: '3rem', left: '50%', transform: 'translateX(-50%)',
+              width: '100%', maxWidth: '540px', zIndex: 10,
+            }}>
+              <div className="transition-panel">
+                {/* Spinner */}
+                <div style={{ position: 'relative', width: '48px', height: '48px', margin: '0 auto 20px' }}>
+                  <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', border: '1px solid rgba(255,255,255,0.05)' }} />
+                  <div className="spin-ring" />
+                </div>
 
-{/* ════════════════════════════════════════════
+                <div style={{ fontSize: '10px', letterSpacing: '0.3em', color: '#EDEEF2', textTransform: 'uppercase', fontWeight: 'bold', marginBottom: '6px' }}>
+                  INITIALIZING MISSION CONTROL...
+                </div>
+                <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginBottom: '16px' }}>
+                  Multi-agent anomaly response system coming online
+                </div>
+
+                {/* Sequential log messages */}
+                <div className="transition-log">
+                  {loadMessages.slice(0, loadStep).map((msg, i) => (
+                    <div key={i} style={{
+                      color: i === loadStep - 1 ? '#EDEEF2' : 'rgba(230,232,236,0.4)',
+                      marginBottom: '3px', fontSize: '10px', fontFamily: 'monospace', letterSpacing: '0.08em',
+                    }}>
+                      {i < loadStep - 1 && <span style={{ color: '#00FF88', marginRight: '4px' }}>✓</span>}
+                      {i === loadStep - 1 && <span style={{ color: '#EDEEF2', marginRight: '4px' }} className="dot-blink">▸</span>}
+                      {msg}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Progress bar */}
+                <div style={{ width: '100%', height: '2px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', marginTop: '14px', overflow: 'hidden' }}>
+                  <div style={{
+                    height: '100%',
+                    width: `${(loadStep / loadMessages.length) * 100}%`,
+                    background: 'linear-gradient(90deg, #EDEEF2, #00FF88)',
+                    transition: 'width 0.4s ease',
+                    boxShadow: '0 0 8px rgba(230,232,236,0.5)',
+                  }} />
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {/* ════════════════════════════════════════════
           VIEW 3 — DASHBOARD (full AERO-ASTRA)
          ════════════════════════════════════════════ */}
-{
-  showDashboard && (
-    <div className="dashboard-container fade-enter" style={{ paddingTop: '96px', paddingBottom: '36px' }}>
-      {activeView === 'about' ? <AboutView /> : (
-      <>
+      {
+        showDashboard && (
+          <div className="dashboard-container fade-enter" style={{ paddingTop: '96px', paddingBottom: '36px' }}>
+            {activeView === 'about' ? <AboutView /> : (
+              <>
 
-      {scenarioPhase === 'resolved' && activeScenario?.isCaseStudy && (
-        <div style={{
-          position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(2,3,8,0.8)',
-          backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
-        }}>
-          <div style={{
-            width: '100%', maxWidth: '600px', background: 'rgba(10,8,4,0.97)',
-            border: '1px solid rgba(255,180,80,0.4)', borderRadius: '6px', padding: '28px 32px',
-            boxShadow: '0 0 60px rgba(255,180,80,0.1), 0 20px 60px rgba(0,0,0,0.6)',
-          }}>
-            <div style={{ fontSize: '9px', letterSpacing: '0.2em', color: '#FFC168', textTransform: 'uppercase', marginBottom: '6px' }}>
-              Preventive Measure — {activeScenario.citation.incident}
-            </div>
-            <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#EDEEF2', marginBottom: '14px', lineHeight: 1.5 }}>
-              If AERO-ASTRA had been running, this failure would not have gone undetected.
-            </div>
-            <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.75)', lineHeight: 1.7, marginBottom: '14px' }}>
-              {activeScenario.citation.note} In this replay, SENTINEL's Engine C (residual correlation) flagged the
-              attitude_error / reaction_wheel_speed co-divergence within seconds of onset — well before either
-              channel alone crossed an absolute threshold — giving GUARDIAN and ATHENA time to act before the
-              condition could become structurally unrecoverable.
-            </div>
-            <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.4)', lineHeight: 1.6, marginBottom: '20px', fontStyle: 'italic' }}>
-              Source: {activeScenario.citation.source}
-            </div>
-            <button onClick={resetSystem} className="action-btn" style={{ marginTop: 0 }}>
-              Return to Monitoring
-            </button>
-          </div>
-        </div>
-      )}
-
-      <div className="main-content">
-        {/* ── LEFT SIDEBAR ── */}
-        <div className="sidebar">
-          <div className="panel">
-            <div className="panel-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>TELEMETRY STREAM</span>
-              {isAnomaly && (
-                <button onClick={() => setShowDiff(v => !v)} style={{
-                  background: showDiff ? 'rgba(230,232,236,0.15)' : 'transparent',
-                  border: '1px solid rgba(230,232,236,0.4)', color: '#EDEEF2',
-                  fontSize: '9px', padding: '2px 8px', letterSpacing: '0.05em',
-                  textTransform: 'uppercase', cursor: 'pointer', fontFamily: 'inherit', borderRadius: '3px',
-                }}>
-                  {showDiff ? 'Hide Diff' : 'See Difference'}
-                </button>
-              )}
-            </div>
-            <div className="text-muted" style={{ fontSize: '10px', marginBottom: '6px' }}>OPSSAT‑AD Live Telemetry Sync: OK</div>
-            {showDiff && isAnomaly ? (
-              <div style={{ background: '#000', border: '1px solid #1f2833', fontSize: '10px' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', padding: '6px 8px', borderBottom: '1px dashed #1f2833', color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.05em', fontSize: '9px' }}>
-                  <span>Param</span><span>Baseline</span><span>Live</span>
-                </div>
-                {TELEMETRY_ROWS.map(row => {
-                  const changed = liveTelemetry[row.key] !== BASELINE_TELEMETRY[row.key];
-                  return (
-                    <div key={row.key} style={{
-                      display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', padding: '6px 8px',
-                      background: changed ? 'rgba(255,59,59,0.08)' : 'transparent',
-                      borderBottom: '1px solid #0f1318',
+                {scenarioPhase === 'resolved' && activeScenario?.isCaseStudy && (
+                  <div style={{
+                    position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(2,3,8,0.8)',
+                    backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+                  }}>
+                    <div style={{
+                      width: '100%', maxWidth: '600px', background: 'rgba(10,8,4,0.97)',
+                      border: '1px solid rgba(255,180,80,0.4)', borderRadius: '6px', padding: '28px 32px',
+                      boxShadow: '0 0 60px rgba(255,180,80,0.1), 0 20px 60px rgba(0,0,0,0.6)',
                     }}>
-                      <span style={{ color: 'rgba(255,255,255,0.55)' }}>{row.label}</span>
-                      <span style={{ color: 'rgba(255,255,255,0.35)', textDecoration: changed ? 'line-through' : 'none' }}>{BASELINE_TELEMETRY[row.key]}</span>
-                      <span className={changed ? 'text-red' : 'text-cyan'} style={{ fontWeight: changed ? 'bold' : 'normal' }}>{liveTelemetry[row.key]}</span>
+                      <div style={{ fontSize: '9px', letterSpacing: '0.2em', color: '#FFC168', textTransform: 'uppercase', marginBottom: '6px' }}>
+                        Preventive Measure — {activeScenario.citation.incident}
+                      </div>
+                      <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#EDEEF2', marginBottom: '14px', lineHeight: 1.5 }}>
+                        If AERO-ASTRA had been running, this failure would not have gone undetected.
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.75)', lineHeight: 1.7, marginBottom: '14px' }}>
+                        {activeScenario.citation.note} In this replay, SENTINEL's Engine C (residual correlation) flagged the
+                        attitude_error / reaction_wheel_speed co-divergence within seconds of onset — well before either
+                        channel alone crossed an absolute threshold — giving GUARDIAN and ATHENA time to act before the
+                        condition could become structurally unrecoverable.
+                      </div>
+                      <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.4)', lineHeight: 1.6, marginBottom: '20px', fontStyle: 'italic' }}>
+                        Source: {activeScenario.citation.source}
+                      </div>
+                      <button onClick={resetSystem} className="action-btn" style={{ marginTop: 0 }}>
+                        Return to Monitoring
+                      </button>
                     </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div style={{ background: '#000', padding: '10px', border: '1px solid #1f2833', fontSize: '11px', lineHeight: 1.7 }}>
-                {TELEMETRY_ROWS.map(row => {
-                  const changed = isAnomaly && liveTelemetry[row.key] !== BASELINE_TELEMETRY[row.key];
-                  return (
-                    <div key={row.key} className="data-row">
-                      <span>{row.label}:</span>
-                      <span className={changed ? 'text-red dot-blink' : 'text-cyan'}>{liveTelemetry[row.key]}</span>
+                  </div>
+                )}
+
+                <div className="main-content">
+                  {/* ── LEFT SIDEBAR ── */}
+                  <div className="sidebar">
+                    <div className="panel">
+                      <div className="panel-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span>TELEMETRY STREAM</span>
+                        {isAnomaly && (
+                          <button onClick={() => setShowDiff(v => !v)} style={{
+                            background: showDiff ? 'rgba(230,232,236,0.15)' : 'transparent',
+                            border: '1px solid rgba(230,232,236,0.4)', color: '#EDEEF2',
+                            fontSize: '9px', padding: '2px 8px', letterSpacing: '0.05em',
+                            textTransform: 'uppercase', cursor: 'pointer', fontFamily: 'inherit', borderRadius: '3px',
+                          }}>
+                            {showDiff ? 'Hide Diff' : 'See Difference'}
+                          </button>
+                        )}
+                      </div>
+                      <div className="text-muted" style={{ fontSize: '10px', marginBottom: '6px' }}>OPSSAT‑AD Live Telemetry Sync: OK</div>
+                      {showDiff && isAnomaly ? (
+                        <div style={{ background: '#000', border: '1px solid #1f2833', fontSize: '10px' }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', padding: '6px 8px', borderBottom: '1px dashed #1f2833', color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.05em', fontSize: '9px' }}>
+                            <span>Param</span><span>Baseline</span><span>Live</span>
+                          </div>
+                          {TELEMETRY_ROWS.map(row => {
+                            const changed = liveTelemetry[row.key] !== BASELINE_TELEMETRY[row.key];
+                            return (
+                              <div key={row.key} style={{
+                                display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', padding: '6px 8px',
+                                background: changed ? 'rgba(255,59,59,0.08)' : 'transparent',
+                                borderBottom: '1px solid #0f1318',
+                              }}>
+                                <span style={{ color: 'rgba(255,255,255,0.55)' }}>{row.label}</span>
+                                <span style={{ color: 'rgba(255,255,255,0.35)', textDecoration: changed ? 'line-through' : 'none' }}>{BASELINE_TELEMETRY[row.key]}</span>
+                                <span className={changed ? 'text-red' : 'text-cyan'} style={{ fontWeight: changed ? 'bold' : 'normal' }}>{liveTelemetry[row.key]}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div style={{ background: '#000', padding: '10px', border: '1px solid #1f2833', fontSize: '11px', lineHeight: 1.7 }}>
+                          {TELEMETRY_ROWS.map(row => {
+                            const changed = isAnomaly && liveTelemetry[row.key] !== BASELINE_TELEMETRY[row.key];
+                            return (
+                              <div key={row.key} className="data-row">
+                                <span>{row.label}:</span>
+                                <span className={changed ? 'text-red dot-blink' : 'text-cyan'}>{liveTelemetry[row.key]}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
-                  );
-                })}
-              </div>
+
+                    <div className="panel">
+                      <BorderGlow borderRadius={6} glowRadius={16} fillOpacity={0.15}
+                        backgroundColor={isAnomaly ? 'rgba(255,59,59,0.05)' : 'rgba(255,255,255,0.02)'}>
+                        <div style={{
+                          padding: '10px', textAlign: 'center', fontWeight: 'bold', fontSize: '12px',
+                        }} className={isAnomaly ? 'text-red' : 'text-green'}>
+                          {isAnomaly ? '⚠ ANOMALY DETECTED' : '✓ SYSTEM NOMINAL'}
+                        </div>
+                      </BorderGlow>
+                      <BorderGlow borderRadius={6} glowRadius={16} fillOpacity={0.25} className="trigger-btn-glow">
+                        <div style={{
+                          padding: '8px 14px',
+                          display: 'flex', alignItems: 'center', gap: '8px',
+                          fontSize: '11px', fontWeight: 600, letterSpacing: '0.06em',
+                          color: replayAct === 'fault_developing' ? '#FF6B6B'
+                            : replayAct === 'recovery' ? '#FFB84D'
+                              : '#00E5A0',
+                        }}>
+                          {/* Pulsing live dot */}
+                          <span style={{
+                            width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
+                            background: replayAct === 'fault_developing' ? '#FF6B6B'
+                              : replayAct === 'recovery' ? '#FFB84D'
+                                : '#00E5A0',
+                            animation: 'pulseGreen 1.4s ease-in-out infinite',
+                          }} />
+                          {replayAct === 'fault_developing' ? 'FAULT DEVELOPING'
+                            : replayAct === 'recovery' ? 'RECOVERY IN PROGRESS'
+                              : 'LIVE — NOMINAL MONITORING'}
+                        </div>
+                      </BorderGlow>
+                    </div>
+
+                    <div className="panel flex-1">
+                      <AgentNav
+                        agents={AGENT_ROSTER}
+                        activeAgent={activeAgentPage}
+                        onSelect={code => setActiveAgentPage(code)}
+                      />
+                    </div>
+                  </div>
+
+                  {activeAgentPage ? (
+                    <AgentDetailPage
+                      agent={activeAgentPage}
+                      activeScenario={activeScenario}
+                      activeSeverity={activeSeverity}
+                      isAnomaly={isAnomaly}
+                      hasIncidentData={hasIncidentData}
+                      scenarioPhase={scenarioPhase}
+                      guardianTier={guardianTier}
+                      guardianApproved={guardianApproved}
+                      handleApprove={handleApprove}
+                      selectedMitigation={selectedMitigation}
+                      setSelectedMitigation={setSelectedMitigation}
+                      executeRunbook={executeRunbook}
+                      logs={logs}
+                      liveTelemetry={liveTelemetry}
+                      BASELINE_TELEMETRY={BASELINE_TELEMETRY}
+                      TELEMETRY_ROWS={TELEMETRY_ROWS}
+                      backendOnline={backendOnline}
+                      backendData={backendData}
+                      scribeReport={scribeReport}
+                      awaitingActivation={awaitingActivation}
+                      sherlockDone={sherlockDone}
+                      sherlockLoading={sherlockLoading}
+                      athenaLoading={athenaLoading}
+                      onActivateSherlock={async () => {
+                        setSherlockLoading(true);
+                        try {
+                          await fetch('/api/agent/sherlock/trigger', { method: 'POST' });
+                        } catch (e) {
+                          console.error('SHERLOCK trigger failed', e);
+                          setSherlockLoading(false);
+                        }
+                      }}
+                      onActivateAthena={async () => {
+                        setAthenaLoading(true);
+                        try {
+                          await fetch('/api/agent/athena/trigger', { method: 'POST' });
+                        } catch (e) {
+                          console.error('ATHENA trigger failed', e);
+                        }
+                        setAthenaLoading(false);
+                      }}
+                    />
+                  ) : (
+                    <>
+                      {/* ── CENTER ── */}
+                      <div className="center-layout">
+                        <div className="center-view">
+                          {isAnomaly && <div className="emergency-overlay" />}
+                          <div className="overlay-status">
+                            <span className={`status-indicator${isAnomaly ? ' red' : ''}`} />
+                            ORACLE: DIGITAL TWIN LIVE
+                          </div>
+                          <AnomalyLabels
+                            subsystem={activeScenario?.subsystem}
+                            active={isAnomaly}
+                            scenarioKey={activeScenario?.key}
+                          />
+                          <ModelViewer
+                            url="/simple_satellite_low_poly_free.glb"
+                            width="200%"
+                            height="50%"
+                            autoRotate={!isAnomaly}
+                            autoRotateSpeed={0.5}
+                            enableManualRotation={!isAnomaly}
+                            enableMouseParallax={!isAnomaly}
+                            enableHoverRotation={!isAnomaly}
+                            environmentPreset="warehouse"
+                            defaultZoom={0.8}
+                            defaultRotationX={20}
+                            defaultRotationY={-50}
+                            modelXOffset={isAnomaly ? (anomalyFocus?.xOff ?? -0.16) : 0}
+                            modelYOffset={isAnomaly ? (anomalyFocus?.yOff ?? 0) : 0}
+                            zoomTarget={isAnomaly ? (anomalyFocus?.zoom ?? 0.8) : null}
+                            lockRotation={isAnomaly}
+                            lockRotationX={anomalyFocus?.rotX ?? 8}
+                            lockRotationY={anomalyFocus?.rotY ?? 90}
+                            showScreenshotButton={false}
+                          />
+                        </div>
+
+                        <div className="bottom-bar">
+                          <div className="bottom-section">
+                            <div className="panel-title">AGENT: ATHENA (STRATEGIST)</div>
+                            {(scenarioPhase === 'planning' || scenarioPhase === 'awaiting_approval' || scenarioPhase === 'executing') ? (
+                              <div style={{ fontSize: '12px', marginTop: '8px', lineHeight: 1.7 }}>
+                                Simulating mitigation options...<br />
+                                <span className="text-cyan">Selected: Option {selectedMitigation}</span><br />
+                                <span className={selectedMitigation === 1 ? 'text-green' : 'text-red'}>
+                                  {selectedMitigation === 1 ? 'Confidence: 98% (Safe)' : 'Risk: 15% System Loss (CRITICAL)'}
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="text-muted" style={{ fontSize: '11px', marginTop: '10px' }}>Standby for mitigation models.</div>
+                            )}
+                          </div>
+
+                          <div className="bottom-section">
+                            <div className="panel-title">AGENT: GUARDIAN (SAFETY GATE)</div>
+                            {guardianTier === 'AUTOMATED_GUARDED' ? (
+                              <div style={{ fontSize: '11px', marginTop: '10px', lineHeight: 1.6 }}>
+                                <span className="text-green" style={{ fontWeight: 'bold' }}>● AUTOMATED_GUARDED</span>
+                                <div className="text-muted" style={{ marginTop: '4px' }}>Low severity — executing without human approval.</div>
+                              </div>
+                            ) : (
+                              <>
+                                <div className="slider-container">
+                                  <label className="switch">
+                                    <input type="checkbox" disabled={scenarioPhase !== 'awaiting_approval'} checked={guardianApproved} onChange={handleApprove} />
+                                    <span className="slider" />
+                                  </label>
+                                  <span style={{ fontSize: '12px', color: isAnomaly ? '#fff' : '#666' }}>Approve Primary Mitigation</span>
+                                </div>
+                                {isAnomaly && <div className="text-red" style={{ fontSize: '10px', marginTop: '6px' }}>MANUAL_INTERLOCK — human approval required.</div>}
+                                {guardianApproved && <div style={{ fontSize: '11px', marginTop: '8px' }} className="text-green">Safety Approval Granted.</div>}
+                              </>
+                            )}
+                          </div>
+
+                          <div className="bottom-section" style={{ borderRight: 'none', paddingRight: 0 }}>
+                            <div className="panel-title">AGENT: SCRIBE (ORCHESTRATOR)</div>
+                            <div className="text-muted" style={{ fontSize: '11px', marginBottom: '8px' }}>Execute action and generate audit runbook.</div>
+                            <button className="action-btn" disabled={!guardianApproved || scenarioPhase !== 'awaiting_approval' || guardianTier === 'AUTOMATED_GUARDED'} onClick={() => executeRunbook()}>
+                              {scenarioPhase === 'executing' ? 'EXECUTING...' : guardianTier === 'AUTOMATED_GUARDED' ? 'AUTO-EXECUTING...' : 'EXECUTE RUNBOOK'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* ── RIGHT SIDEBAR ── */}
+                      <div className="sidebar right-panel">
+                        <div className="panel">
+                          <div className="panel-title">MISSION TIMELINE</div>
+                          <div className="mission-timeline">
+                            {MISSION_STAGES.map(stage => {
+                              const phaseIdx = PHASE_ORDER.indexOf(scenarioPhase);
+                              const state = scenarioPhase === 'nominal' ? 'idle'
+                                : scenarioPhase === 'resolved' ? 'done'
+                                  : phaseIdx > stage.minPhaseIdx ? 'done'
+                                    : phaseIdx === stage.minPhaseIdx ? 'active'
+                                      : 'pending';
+                              return (
+                                <div key={stage.code} className={`timeline-stage timeline-stage--${state}`}>
+                                  <span className="timeline-dot" />
+                                  <span className="timeline-label">{stage.code}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        <div className="panel flex-1">
+                          <div className="panel-title">GROUND CONTACT</div>
+                          <div className="data-row"><span>Next AOS</span><span className="text-cyan">{missionStart ? `T-${Math.max(0, 8 - Math.floor(((Date.now() - missionStart) / 1000) % 480 / 60))} min` : 'T-8 min'}</span></div>
+                          <div className="data-row"><span>Station</span><span>SVALBARD (SG3)</span></div>
+                          <div className="data-row"><span>Orbit</span><span className="text-cyan">#{missionStart ? 4127 + Math.floor((Date.now() - missionStart) / 5400000) : 4127}</span></div>
+                          <div className="data-row"><span>Alt / Vel</span><span>540 km | 7.5 km/s</span></div>
+                          <div className="text-muted" style={{ fontSize: '9px', marginTop: '8px', lineHeight: 1.5 }}>
+                            Simulated pass schedule — not wired to a live scheduler yet.
+                          </div>
+                        </div>
+
+                        <VitalsCluster vitals={backendData.vitals} />
+
+                        <div className="panel" style={{ gap: '10px', display: 'flex', flexDirection: 'column' }}>
+                          <div className="panel-title" style={{ marginBottom: 0 }}>SYSTEM RESOURCES</div>
+                          <SystemMeter label="CPU" />
+                          <SystemMeter label="GPU" />
+                          <SystemMeter label="NET" />
+                          <SystemMeter label="SENS" />
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </>
             )}
-          </div>
 
-          <div className="panel">
-            <BorderGlow borderRadius={6} glowRadius={16} fillOpacity={0.15}
-              backgroundColor={isAnomaly ? 'rgba(255,59,59,0.05)' : 'rgba(255,255,255,0.02)'}>
-              <div style={{
-                padding: '10px', textAlign: 'center', fontWeight: 'bold', fontSize: '12px',
-              }} className={isAnomaly ? 'text-red' : 'text-green'}>
-                {isAnomaly ? '⚠ ANOMALY DETECTED' : '✓ SYSTEM NOMINAL'}
-              </div>
-            </BorderGlow>
-            <BorderGlow borderRadius={6} glowRadius={16} fillOpacity={0.25} className="trigger-btn-glow">
-              <div style={{
-                padding: '8px 14px',
-                display: 'flex', alignItems: 'center', gap: '8px',
-                fontSize: '11px', fontWeight: 600, letterSpacing: '0.06em',
-                color: replayAct === 'fault_developing' ? '#FF6B6B'
-                     : replayAct === 'recovery'         ? '#FFB84D'
-                     :                                    '#00E5A0',
-              }}>
-                {/* Pulsing live dot */}
-                <span style={{
-                  width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
-                  background: replayAct === 'fault_developing' ? '#FF6B6B'
-                             : replayAct === 'recovery'         ? '#FFB84D'
-                             :                                    '#00E5A0',
-                  animation: 'pulseGreen 1.4s ease-in-out infinite',
-                }} />
-                {replayAct === 'fault_developing' ? 'FAULT DEVELOPING'
-               : replayAct === 'recovery'         ? 'RECOVERY IN PROGRESS'
-               :                                    'LIVE — NOMINAL MONITORING'}
-              </div>
-            </BorderGlow>
-          </div>
-
-          <div className="panel flex-1">
-            <AgentNav
-              agents={AGENT_ROSTER}
-              activeAgent={activeAgentPage}
-              onSelect={code => setActiveAgentPage(code)}
-            />
-          </div>
-        </div>
-
-        {activeAgentPage ? (
-          <AgentDetailPage
-            agent={activeAgentPage}
-            activeScenario={activeScenario}
-            activeSeverity={activeSeverity}
-            isAnomaly={isAnomaly}
-            hasIncidentData={hasIncidentData}
-            scenarioPhase={scenarioPhase}
-            guardianTier={guardianTier}
-            guardianApproved={guardianApproved}
-            handleApprove={handleApprove}
-            selectedMitigation={selectedMitigation}
-            setSelectedMitigation={setSelectedMitigation}
-            executeRunbook={executeRunbook}
-            logs={logs}
-            liveTelemetry={liveTelemetry}
-            BASELINE_TELEMETRY={BASELINE_TELEMETRY}
-            TELEMETRY_ROWS={TELEMETRY_ROWS}
-            backendOnline={backendOnline}
-            backendData={backendData}
-            scribeReport={scribeReport}
-          />
-        ) : (
-        <>
-        {/* ── CENTER ── */}
-        <div className="center-layout">
-          <div className="center-view">
-            {isAnomaly && <div className="emergency-overlay" />}
-            <div className="overlay-status">
-              <span className={`status-indicator${isAnomaly ? ' red' : ''}`} />
-              ORACLE: DIGITAL TWIN LIVE
-            </div>
-            <AnomalyLabels
-              subsystem={activeScenario?.subsystem}
-              active={isAnomaly}
-              scenarioKey={activeScenario?.key}
-            />
-            <ModelViewer
-              url="/simple_satellite_low_poly_free.glb"
-              width="100%"
-              height="100%"
-              autoRotate={!isAnomaly}
-              autoRotateSpeed={0.5}
-              enableManualRotation={!isAnomaly}
-              enableMouseParallax={!isAnomaly}
-              enableHoverRotation={!isAnomaly}
-              environmentPreset="warehouse"
-              defaultZoom={0.8}
-              defaultRotationX={20}
-              defaultRotationY={-50}
-              modelXOffset={isAnomaly ? (anomalyFocus?.xOff ?? -0.16) : 0}
-              modelYOffset={isAnomaly ? (anomalyFocus?.yOff ?? 0) : 0}
-              zoomTarget={isAnomaly ? (anomalyFocus?.zoom ?? 0.8) : null}
-              lockRotation={isAnomaly}
-              lockRotationX={anomalyFocus?.rotX ?? 8}
-              lockRotationY={anomalyFocus?.rotY ?? 90}
-              showScreenshotButton={false}
-            />
-          </div>
-
-          <div className="bottom-bar">
-            <div className="bottom-section">
-              <div className="panel-title">AGENT: ATHENA (STRATEGIST)</div>
-              {(scenarioPhase === 'planning' || scenarioPhase === 'awaiting_approval' || scenarioPhase === 'executing') ? (
-                <div style={{ fontSize: '12px', marginTop: '8px', lineHeight: 1.7 }}>
-                  Simulating mitigation options...<br />
-                  <span className="text-cyan">Selected: Option {selectedMitigation}</span><br />
-                  <span className={selectedMitigation === 1 ? 'text-green' : 'text-red'}>
-                    {selectedMitigation === 1 ? 'Confidence: 98% (Safe)' : 'Risk: 15% System Loss (CRITICAL)'}
-                  </span>
-                </div>
-              ) : (
-                <div className="text-muted" style={{ fontSize: '11px', marginTop: '10px' }}>Standby for mitigation models.</div>
-              )}
-            </div>
-
-            <div className="bottom-section">
-              <div className="panel-title">AGENT: GUARDIAN (SAFETY GATE)</div>
-              {guardianTier === 'AUTOMATED_GUARDED' ? (
-                <div style={{ fontSize: '11px', marginTop: '10px', lineHeight: 1.6 }}>
-                  <span className="text-green" style={{ fontWeight: 'bold' }}>● AUTOMATED_GUARDED</span>
-                  <div className="text-muted" style={{ marginTop: '4px' }}>Low severity — executing without human approval.</div>
-                </div>
-              ) : (
-                <>
-                  <div className="slider-container">
-                    <label className="switch">
-                      <input type="checkbox" disabled={scenarioPhase !== 'awaiting_approval'} checked={guardianApproved} onChange={handleApprove} />
-                      <span className="slider" />
-                    </label>
-                    <span style={{ fontSize: '12px', color: isAnomaly ? '#fff' : '#666' }}>Approve Primary Mitigation</span>
-                  </div>
-                  {isAnomaly && <div className="text-red" style={{ fontSize: '10px', marginTop: '6px' }}>MANUAL_INTERLOCK — human approval required.</div>}
-                  {guardianApproved && <div style={{ fontSize: '11px', marginTop: '8px' }} className="text-green">Safety Approval Granted.</div>}
-                </>
-              )}
-            </div>
-
-            <div className="bottom-section" style={{ borderRight: 'none', paddingRight: 0 }}>
-              <div className="panel-title">AGENT: SCRIBE (ORCHESTRATOR)</div>
-              <div className="text-muted" style={{ fontSize: '11px', marginBottom: '8px' }}>Execute action and generate audit runbook.</div>
-              <button className="action-btn" disabled={!guardianApproved || scenarioPhase !== 'awaiting_approval' || guardianTier === 'AUTOMATED_GUARDED'} onClick={() => executeRunbook()}>
-                {scenarioPhase === 'executing' ? 'EXECUTING...' : guardianTier === 'AUTOMATED_GUARDED' ? 'AUTO-EXECUTING...' : 'EXECUTE RUNBOOK'}
-              </button>
+            {/* Footer */}
+            <div style={{
+              position: 'fixed', bottom: 0, left: 0, right: 0, height: '36px',
+              background: 'rgba(0,0,0,0.6)', borderTop: '1px solid #1f2833',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px',
+              fontSize: '9px', fontFamily: 'monospace', letterSpacing: '0.1em', color: 'rgba(255,255,255,0.4)',
+              textTransform: 'uppercase', zIndex: 40,
+            }}>
+              <span>ISRO NETRA FEED: <span style={{ color: '#00FF88' }}>● LIVE</span></span>
+              <div style={{ display: 'flex', gap: '20px' }}><SystemMeter label="CPU" /><SystemMeter label="NET" /></div>
+              <span>AERO‑ASTRA MISSION OPS v2.5 <span style={{ color: '#EDEEF2' }}>✓ NOMINAL</span></span>
             </div>
           </div>
-        </div>
-
-        {/* ── RIGHT SIDEBAR ── */}
-        <div className="sidebar right-panel">
-          <div className="panel">
-            <div className="panel-title">MISSION TIMELINE</div>
-            <div className="mission-timeline">
-              {MISSION_STAGES.map(stage => {
-                const phaseIdx = PHASE_ORDER.indexOf(scenarioPhase);
-                const state = scenarioPhase === 'nominal' ? 'idle'
-                  : scenarioPhase === 'resolved' ? 'done'
-                  : phaseIdx > stage.minPhaseIdx ? 'done'
-                  : phaseIdx === stage.minPhaseIdx ? 'active'
-                  : 'pending';
-                return (
-                  <div key={stage.code} className={`timeline-stage timeline-stage--${state}`}>
-                    <span className="timeline-dot" />
-                    <span className="timeline-label">{stage.code}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="panel flex-1">
-            <div className="panel-title">GROUND CONTACT</div>
-            <div className="data-row"><span>Next AOS</span><span className="text-cyan">{missionStart ? `T-${Math.max(0, 8 - Math.floor(((Date.now() - missionStart) / 1000) % 480 / 60))} min` : 'T-8 min'}</span></div>
-            <div className="data-row"><span>Station</span><span>SVALBARD (SG3)</span></div>
-            <div className="data-row"><span>Orbit</span><span className="text-cyan">#{missionStart ? 4127 + Math.floor((Date.now() - missionStart) / 5400000) : 4127}</span></div>
-            <div className="data-row"><span>Alt / Vel</span><span>540 km | 7.5 km/s</span></div>
-            <div className="text-muted" style={{ fontSize: '9px', marginTop: '8px', lineHeight: 1.5 }}>
-              Simulated pass schedule — not wired to a live scheduler yet.
-            </div>
-          </div>
-
-          <VitalsCluster vitals={backendData.vitals} />
-
-          <div className="panel" style={{ gap: '10px', display: 'flex', flexDirection: 'column' }}>
-            <div className="panel-title" style={{ marginBottom: 0 }}>SYSTEM RESOURCES</div>
-            <SystemMeter label="CPU" />
-            <SystemMeter label="GPU" />
-            <SystemMeter label="NET" />
-            <SystemMeter label="SENS" />
-          </div>
-        </div>
-        </>
-        )}
-      </div>
-      </>
-      )}
-
-      {/* Footer */}
-      <div style={{
-        position: 'fixed', bottom: 0, left: 0, right: 0, height: '36px',
-        background: 'rgba(0,0,0,0.6)', borderTop: '1px solid #1f2833',
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px',
-        fontSize: '9px', fontFamily: 'monospace', letterSpacing: '0.1em', color: 'rgba(255,255,255,0.4)',
-        textTransform: 'uppercase', zIndex: 40,
-      }}>
-        <span>ISRO NETRA FEED: <span style={{ color: '#00FF88' }}>● LIVE</span></span>
-        <div style={{ display: 'flex', gap: '20px' }}><SystemMeter label="CPU" /><SystemMeter label="NET" /></div>
-        <span>AERO‑ASTRA MISSION OPS v2.5 <span style={{ color: '#EDEEF2' }}>✓ NOMINAL</span></span>
-      </div>
-    </div>
-  )
-}
+        )
+      }
     </div >
   );
 }

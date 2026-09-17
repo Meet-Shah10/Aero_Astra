@@ -1,0 +1,22 @@
+# ── Core API server ──────────────────────────────────────────────────────────
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+websockets>=12.0
+python-dotenv>=1.0.0
+
+# ── Data & ML ─────────────────────────────────────────────────────────────────
+numpy>=1.26.0
+pandas>=2.2.0
+scikit-learn>=1.4.0
+pydantic>=2.6.0
+
+# ── LLM clients ───────────────────────────────────────────────────────────────
+openai>=1.30.0          # used for OpenRouter + NVIDIA NIM + MLX-LM (OpenAI-compat API)
+httpx>=0.27.0
+
+# ── RAG / vector store (ATHENA) ───────────────────────────────────────────────
+chromadb>=0.5.0
+sentence-transformers>=3.0.0
+
+# ── MLX inference (Apple Silicon only — skip on non-Apple hardware) ───────────
+# mlx-lm>=0.16.0        # Uncomment if running local models on Apple Silicon

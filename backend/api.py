@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 # Import modules from the project
-from backend.simulator.engine import simulate_scenario
+from backend.simulator.engine import simulate_scenario, simulate_scenario_stream
 from backend.simulator.schemas import SatelliteState
 from backend.sentinel.engines import SentinelPersistenceFilter, PhysicsSpikeFilter, ResidualCorrelationDetector, score_xgboost
 from backend.sherlock.agent import SherlockAgent
@@ -42,6 +42,34 @@ from fastapi.middleware.cors import CORSMiddleware
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("api")
+
+# Constraint 3 (speculative decoding batch saturation guard):
+# High concurrent batch sizes starve the draft model of idle GPU compute,
+# diminishing speculative decoding speedup gains. This semaphore enforces
+# at most one LLM inference chain at a time across all agents.
+# Sherlock and Athena both acquire this before making any LLM call.
+LLM_SEMAPHORE = asyncio.Semaphore(1)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Manual-activation state
+# Agents do NOT auto-fire when an anomaly is detected. Instead, the frontend
+# presses a button which calls the /api/agent/<name>/trigger endpoints below.
+# SENTINEL always runs (anomaly detection). CHRONICLE is a passive log view.
+# ─────────────────────────────────────────────────────────────────────────────
+_pending_anomaly:    AnomalyEvent | None  = None  # set when SENTINEL fires
+_pending_state:      SatelliteState | None = None  # telemetry at detection time
+_pending_fault:      str | None = None             # fault_scenario label
+_pending_severity:   float = 0.0
+_last_diagnosis:     object | None = None          # SimpleNamespace or SherlockDiagnosis
+_pending_oracle_req: OracleRequest | None = None   # ready after SHERLOCK runs
+_sherlock_agent:     object | None = None          # SherlockAgent — set at startup
+_athena_agent:       object | None = None          # AthenaAgent   — set at startup
+
+# asyncio.Event that pauses the replay frame loop while agents await manual
+# activation. Cleared when SENTINEL fires; set when SHERLOCK trigger completes
+# (or manually via POST /api/replay/resume). Must be initialised inside the
+# async startup handler so it attaches to the correct event loop.
+_replay_resume_event: asyncio.Event | None = None
 
 # Maps each backend/simulator/faults.py fault name to the (subsystem,
 # parameter) SENTINEL would realistically flag. Previously this was
@@ -526,17 +554,11 @@ async def replay_stream():
         playlist["total_frames"] / 10 / 60,
     )
 
-    # Lazy init agents once — reused across all loops.
-    try:
-        sherlock_agent = SherlockAgent()
-    except EnvironmentError as key_err:
-        log.warning("SHERLOCK disabled (no API key): %s", key_err)
-        sherlock_agent = None
-    try:
-        athena_agent = AthenaAgent()
-    except EnvironmentError as key_err:
-        log.warning("ATHENA disabled (no API key): %s", key_err)
-        athena_agent = None
+    # Agents are initialised at startup and stored as module-level globals
+    # so the trigger endpoints can access them from any HTTP request.
+    global _sherlock_agent, _athena_agent
+    sherlock_agent = _sherlock_agent  # local alias for use inside this function
+    athena_agent   = _athena_agent
 
     background_tasks: set = set()
     global_timestamp = 0.0   # monotonically increasing wall-clock timestamp
@@ -642,7 +664,10 @@ async def replay_stream():
                 })
             else:
                 try:
-                    athena_plan = await asyncio.to_thread(athena_agent.plan, diag, oracle_response)
+                    # Constraint 3: acquire semaphore before LLM call to
+                    # prevent concurrent GPU batch saturation.
+                    async with LLM_SEMAPHORE:
+                        athena_plan = await asyncio.to_thread(athena_agent.plan, diag, oracle_response)
                     athena_msg = {
                         "type": "athena_plan",
                         "recommended_action": athena_plan.recommended_action,
@@ -716,6 +741,10 @@ async def replay_stream():
             for frame_dict in act["frames"]:
                 await asyncio.sleep(0.1)   # 10fps
 
+                # ── Pause point: wait here while agents await manual activation
+                if _replay_resume_event is not None:
+                    await _replay_resume_event.wait()
+
                 state = _dict_to_state(frame_dict["state"])
 
                 # ── Telemetry broadcast ─────────────────────────────────────
@@ -732,10 +761,31 @@ async def replay_stream():
                         "EPS": {
                             "battery_soc": state.eps.battery_soc,
                             "bus_voltage": state.eps.bus_voltage,
+                            "solar_array_current": state.eps.solar_array_current,
+                            "load_current": state.eps.load_current,
+                        },
+                        "TCS": {
+                            "panel_temp": state.tcs.panel_temp,
+                            "battery_temp": state.tcs.battery_temp,
+                            "heater_on": state.tcs.heater_active,
+                        },
+                        "TTC": {
+                            "signal_strength": state.ttc.signal_strength,
+                            "bit_error_rate": state.ttc.bit_error_rate,
+                            "ground_contact_remaining": state.ttc.ground_contact_remaining,
+                        },
+                        "OBC": {
+                            "cpu_load": state.obc.cpu_load,
+                            "memory_used_pct": round((1 - state.obc.free_memory_mb / 512) * 100, 1),
+                        },
+                        "PROP": {
+                            "fuel_remaining": state.propulsion.fuel_remaining,
+                            "thruster_temp":  state.propulsion.thruster_temp,
                         },
                     },
                 }
                 await manager.broadcast(telemetry_msg)
+
 
                 # ── Vitals ──────────────────────────────────────────────────
                 vitals_payload = calculate_vitals(state)
@@ -799,12 +849,16 @@ async def replay_stream():
                         }
                         await manager.broadcast(sentinel_msg)
 
-                        # DIAGNOSIS (SHERLOCK)
+                        # ── Store pending anomaly for manual agent activation ──
+                        # Do NOT auto-fire SHERLOCK / ORACLE / ATHENA.
+                        # Store the anomaly context so the trigger endpoints can
+                        # use it when the user clicks the agent buttons.
+                        global _pending_anomaly, _pending_state, _pending_fault, _pending_severity
                         dt_ts = datetime.now(timezone.utc)
                         flagged_subsystem, flagged_parameter = FAULT_SUBSYSTEM_MAP.get(
                             fault_scenario, ("EPS", "unknown")
                         )
-                        anomaly_event = AnomalyEvent(
+                        _pending_anomaly = AnomalyEvent(
                             anomaly_id=f"EVT-{loop_index+1:03d}",
                             timestamp=dt_ts,
                             flagged_subsystem=flagged_subsystem,
@@ -813,56 +867,25 @@ async def replay_stream():
                             severity=SeverityLevel.HIGH,
                             telemetry_window=[],
                         )
+                        _pending_state    = state
+                        _pending_fault    = fault_scenario
+                        _pending_severity = severity
 
-                        provider = SimulatorTelemetryProvider(state)
-                        if sherlock_agent is None:
-                            diagnosis = build_fallback_diagnosis(fault_scenario, state, severity)
-                        else:
-                            try:
-                                diagnosis = await asyncio.to_thread(
-                                    sherlock_agent.diagnose, anomaly_event, provider
-                                )
-                            except Exception:
-                                log.exception("SHERLOCK failed")
-                                diagnosis = build_fallback_diagnosis(fault_scenario, state, severity)
-
+                        # Tell the frontend an anomaly is ready — agents await manual trigger
                         await manager.broadcast({
-                            "type": "sherlock_diagnosis",
-                            "primary_root_cause": diagnosis.primary_root_cause,
-                            "causal_chain": diagnosis.causal_chain,
-                            "affected_subsystems": diagnosis.affected_subsystems,
-                            "confidence_score": diagnosis.confidence_score,
-                            "urgency": diagnosis.urgency.value,
-                            "time_to_critical": diagnosis.time_to_critical_estimate_minutes,
-                            "reasoning": diagnosis.reasoning,
+                            "type": "awaiting_activation",
+                            "anomaly_id": _pending_anomaly.anomaly_id,
+                            "flagged_subsystem": flagged_subsystem,
+                            "fault_label": loop_label,
                         })
-
-                        # GUARDIAN
-                        guardian_status = "AUTOMATED_GUARDED"
-                        action_taken = None
-                        ttc = diagnosis.time_to_critical_estimate_minutes
-                        if ttc is not None and ttc < 5:
-                            guardian_status = "AUTONOMOUS_SAFED"
-                            action_taken = "shed_nonessential_load"
-                        elif diagnosis.urgency in (UrgencyLevel.HIGH, UrgencyLevel.CRITICAL):
-                            guardian_status = "MANUAL_INTERLOCK"
-
-                        await manager.broadcast({
-                            "type": "guardian_action",
-                            "status": guardian_status,
-                            "action_taken": action_taken,
-                        })
-
-                        # ORACLE + ATHENA (background)
-                        req = OracleRequest(
-                            current_state=state,
-                            fault_name=fault_scenario,
-                            fault_severity=severity,
-                            diagnosis_context=diagnosis.reasoning,
+                        log.info(
+                            "Anomaly %s stored — stream PAUSED, awaiting manual SHERLOCK/ATHENA activation",
+                            _pending_anomaly.anomaly_id,
                         )
-                        task = asyncio.create_task(run_oracle_in_background(req, diagnosis))
-                        background_tasks.add(task)
-                        task.add_done_callback(background_tasks.discard)
+                        # Pause the replay frame loop so the user has unlimited
+                        # time to read telemetry and click the agent buttons.
+                        if _replay_resume_event is not None:
+                            _replay_resume_event.clear()
 
                 global_timestamp += 1.0
 
@@ -886,13 +909,229 @@ def stream_task_done_callback(task):
 
 @app.on_event("startup")
 async def startup_event():
-    global current_stream_task
+    global current_stream_task, _sherlock_agent, _athena_agent, _replay_resume_event
+
+    # asyncio.Event must be created inside an async context so it binds to the
+    # correct event loop (required in Python 3.10+).
+    _replay_resume_event = asyncio.Event()
+    _replay_resume_event.set()   # Start unpaused
+
+    # Initialise agents here so trigger endpoints can access them.
+    try:
+        _sherlock_agent = SherlockAgent()
+    except EnvironmentError as key_err:
+        log.warning("SHERLOCK disabled (no API key): %s", key_err)
+        _sherlock_agent = None
+    try:
+        _athena_agent = AthenaAgent()
+    except EnvironmentError as key_err:
+        log.warning("ATHENA disabled (no API key): %s", key_err)
+        _athena_agent = None
+
     current_stream_task = asyncio.create_task(replay_stream())
     current_stream_task.add_done_callback(stream_task_done_callback)
 
-# NOTE: /trigger endpoint removed — streaming is now fully autonomous.
-# The replay playlist rotates through fault scenarios without user input.
-# To regenerate the playlist, run: python backend/replay/generate.py
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Manual Agent Trigger Endpoints
+# Called by the frontend "Activate" buttons on the SHERLOCK and ATHENA pages.
+# SENTINEL and CHRONICLE are always-on; agents below require explicit trigger.
+# ─────────────────────────────────────────────────────────────────────────────
+
+from fastapi.responses import JSONResponse
+
+@app.post("/api/agent/sherlock/trigger")
+async def sherlock_trigger():
+    """
+    Run SHERLOCK diagnosis on the pending anomaly stored by SENTINEL.
+    Returns 409 if no anomaly is pending. Broadcasts sherlock_diagnosis
+    and guardian_action over WebSocket, then stores diagnosis for ATHENA.
+    """
+    global _pending_anomaly, _pending_state, _pending_fault, _pending_severity
+    global _last_diagnosis, _pending_oracle_req
+
+    if _pending_anomaly is None:
+        return JSONResponse(status_code=409, content={"error": "No pending anomaly — wait for SENTINEL to detect a fault."})
+
+    anomaly  = _pending_anomaly
+    state    = _pending_state
+    fault    = _pending_fault
+    severity = _pending_severity
+
+    log.info("SHERLOCK trigger received | anomaly=%s", anomaly.anomaly_id)
+
+    provider = SimulatorTelemetryProvider(state)
+    if _sherlock_agent is None:
+        diagnosis = build_fallback_diagnosis(fault, state, severity)
+    else:
+        try:
+            async with LLM_SEMAPHORE:
+                diagnosis = await asyncio.to_thread(_sherlock_agent.diagnose, anomaly, provider)
+        except Exception:
+            log.exception("SHERLOCK trigger failed")
+            diagnosis = build_fallback_diagnosis(fault, state, severity)
+
+    _last_diagnosis = diagnosis
+
+    await manager.broadcast({
+        "type": "sherlock_diagnosis",
+        "primary_root_cause": diagnosis.primary_root_cause,
+        "causal_chain":       diagnosis.causal_chain,
+        "affected_subsystems": diagnosis.affected_subsystems,
+        "confidence_score":   diagnosis.confidence_score,
+        "urgency":            diagnosis.urgency.value,
+        "time_to_critical":   diagnosis.time_to_critical_estimate_minutes,
+        "reasoning":          diagnosis.reasoning,
+    })
+
+    # GUARDIAN (deterministic, auto-fires after SHERLOCK)
+    guardian_status = "AUTOMATED_GUARDED"
+    action_taken    = None
+    ttc = diagnosis.time_to_critical_estimate_minutes
+    if ttc is not None and ttc < 5:
+        guardian_status = "AUTONOMOUS_SAFED"
+        action_taken    = "shed_nonessential_load"
+    elif diagnosis.urgency in (UrgencyLevel.HIGH, UrgencyLevel.CRITICAL):
+        guardian_status = "MANUAL_INTERLOCK"
+
+    await manager.broadcast({
+        "type":         "guardian_action",
+        "status":       guardian_status,
+        "action_taken": action_taken,
+    })
+
+    # Stash oracle request so /api/agent/athena/trigger can use it
+    _pending_oracle_req = OracleRequest(
+        current_state=state,
+        fault_name=fault,
+        fault_severity=severity,
+        diagnosis_context=diagnosis.reasoning,
+    )
+
+    # Tell the frontend SHERLOCK is done and ATHENA is now activatable
+    await manager.broadcast({
+        "type":         "sherlock_done",
+        "anomaly_id":   anomaly.anomaly_id,
+        "oracle_ready": True,
+    })
+
+    # Resume the replay stream — it was frozen since SENTINEL fired so the
+    # user had unlimited time to read the fault telemetry and click Activate.
+    if _replay_resume_event is not None:
+        _replay_resume_event.set()
+        log.info("Replay stream RESUMED after SHERLOCK completion")
+
+    return {"status": "ok", "anomaly_id": anomaly.anomaly_id, "root_cause": diagnosis.primary_root_cause}
+
+
+@app.post("/api/agent/athena/trigger")
+async def athena_trigger():
+    """
+    Run ORACLE simulation + ATHENA planning on the last SHERLOCK diagnosis.
+    Returns 409 if SHERLOCK has not run yet. Broadcasts oracle_simulation
+    and athena_plan over WebSocket.
+    """
+    global _pending_oracle_req, _last_diagnosis
+
+    if _pending_oracle_req is None or _last_diagnosis is None:
+        return JSONResponse(status_code=409, content={"error": "Run SHERLOCK first — no diagnosis available."})
+
+    req  = _pending_oracle_req
+    diag = _last_diagnosis
+
+    log.info("ATHENA trigger received | fault=%s", req.fault_name)
+
+    # ORACLE simulation (fast Monte Carlo, no LLM)
+    try:
+        oracle_response = await asyncio.to_thread(run_oracle, req)
+    except Exception as e:
+        log.exception("ORACLE failed inside ATHENA trigger")
+        await manager.broadcast({
+            "type": "oracle_simulation",
+            "best_action": None,
+            "top_score": 0.0,
+            "mode": "failed",
+        })
+        return JSONResponse(status_code=500, content={"error": f"ORACLE failed: {type(e).__name__}"})
+
+    await manager.broadcast({
+        "type":       "oracle_simulation",
+        "best_action": oracle_response.best_action,
+        "top_score":  oracle_response.results[0].safety_score if oracle_response.results else 0.0,
+        "mode":       oracle_response.mode,
+        "results": [
+            {
+                "action_name":              r.action_name,
+                "safety_score":             r.safety_score,
+                "nominal_recovery_rate":    r.mc_result.nominal_recovery_rate,
+                "degraded_operation_rate":  r.mc_result.degraded_operation_rate,
+                "mission_loss_rate":        r.mc_result.mission_loss_rate,
+                "mean_final_battery_soc":   r.mc_result.mean_final_battery_soc,
+                "std_final_battery_soc":    r.mc_result.std_final_battery_soc,
+                "flags":                    r.flags,
+            }
+            for r in oracle_response.results
+        ],
+    })
+
+    # ATHENA planning (LLM)
+    if _athena_agent is None:
+        await manager.broadcast({
+            "type":               "athena_plan",
+            "recommended_action": oracle_response.best_action,
+            "rationale":          build_fallback_rationale(req.fault_name, oracle_response.best_action, req.current_state),
+            "estimated_recovery_time_minutes": None,
+            "offline_fallback":   True,
+            "options":            build_fallback_options(oracle_response),
+        })
+        return {"status": "ok", "mode": "fallback"}
+
+    try:
+        async with LLM_SEMAPHORE:
+            athena_plan = await asyncio.to_thread(_athena_agent.plan, diag, oracle_response)
+        await manager.broadcast({
+            "type":               "athena_plan",
+            "recommended_action": athena_plan.recommended_action,
+            "rationale":          athena_plan.overall_reasoning,
+            "estimated_recovery_time_minutes": 15,
+            "options": [
+                {
+                    "action_name":        o.action_name,
+                    "procedure_steps":    o.procedure_steps,
+                    "safety_score":       o.safety_score,
+                    "effectiveness_score": o.effectiveness_score,
+                    "is_irreversible":    o.is_irreversible,
+                    "predicted_outcome":  o.predicted_outcome,
+                }
+                for o in athena_plan.options
+            ],
+        })
+        return {"status": "ok", "mode": "llm", "recommended_action": athena_plan.recommended_action}
+    except Exception:
+        log.exception("ATHENA trigger LLM failed")
+        await manager.broadcast({
+            "type":               "athena_plan",
+            "recommended_action": oracle_response.best_action,
+            "rationale":          build_fallback_rationale(req.fault_name, oracle_response.best_action, req.current_state),
+            "estimated_recovery_time_minutes": None,
+            "offline_fallback":   True,
+            "options":            build_fallback_options(oracle_response),
+        })
+        return {"status": "fallback", "mode": "llm_failed"}
+
+
+@app.post("/api/replay/resume")
+async def replay_resume():
+    """
+    Manual escape hatch: resume the paused replay stream without triggering
+    SHERLOCK. Useful when the user wants to skip agent activation and just
+    watch the fault evolve, or to unstick a frozen stream.
+    """
+    if _replay_resume_event is not None:
+        _replay_resume_event.set()
+        log.info("Replay stream manually RESUMED via /api/replay/resume")
+        return {"status": "resumed"}
+    return JSONResponse(status_code=503, content={"error": "Replay event not initialised yet."})
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -902,6 +1141,145 @@ async def websocket_endpoint(websocket: WebSocket):
             data = await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+
+
+# ─── Sandbox WebSocket ────────────────────────────────────────────────────────
+# Dedicated endpoint for the Simulation Sandbox UI.
+# Protocol:
+#   Client → Server:  {"action": "start", "run_id": "A", "fault": ..., "severity": ..., "duration": ..., "dt": ..., "fault_onset_pct": 0.2, "seed": null, "initial": {...}}
+#   Client → Server:  {"action": "stop"}
+#   Server → Client:  {"type": "sandbox_frame", "run_id": ..., "t": ..., "progress": ..., "fault_onset_t": ..., "subsystems": {...}, "vitals": {...}}
+#   Server → Client:  {"type": "sandbox_done", "run_id": ..., "total_steps": ...}
+#   Server → Client:  {"type": "sandbox_error", "message": ...}
+@app.websocket("/ws/sandbox")
+async def sandbox_websocket(websocket: WebSocket):
+    await websocket.accept()
+    active_task: asyncio.Task | None = None
+
+    async def run_simulation(cfg: dict, run_id: str):
+        fault      = cfg.get("fault") or None
+        severity   = float(cfg.get("severity", 0.7))
+        duration   = float(cfg.get("duration", 900.0))
+        dt         = float(cfg.get("dt", 5.0))
+        onset_pct  = float(cfg.get("fault_onset_pct", 0.2))
+        fault_onset = onset_pct * duration
+        seed       = cfg.get("seed")  # None = random
+        speed      = float(cfg.get("speed", 0))  # 0 = MAX (no sleep)
+        total_steps = int(duration / dt) + 1
+
+        # Speed → real-time delay between frames.
+        #   MAX (speed=0): no sleep — stream as fast as Python can compute.
+        #   1×: 0.15s per frame — gentle real-time-ish animation.
+        #   5×: 0.03s per frame  — smooth and fast.
+        #   10×: 0.01s per frame — very fast.
+        _SPEED_DELAY = {0: 0.0, 1: 0.15, 5: 0.03, 10: 0.01}
+        frame_delay_s = _SPEED_DELAY.get(int(speed), 0.0)
+
+        # Build custom initial state from client config (battery_soc override).
+        init_battery_soc = float(cfg.get("battery_soc", 0.85))
+        from backend.simulator.schemas import EPSState
+        custom_initial = _INITIAL_STATE.model_copy(deep=True)
+        custom_initial.eps = custom_initial.eps.model_copy(
+            update={"battery_soc": max(0.05, min(1.0, init_battery_soc))}
+        )
+
+        try:
+            async for frame in simulate_scenario_stream(
+                fault=fault,
+                severity=severity,
+                duration=duration,
+                dt=dt,
+                fault_onset=fault_onset,
+                seed=seed,
+                initial_state=custom_initial,
+                frame_delay_s=frame_delay_s,
+            ):
+                s = frame.state
+                vitals = calculate_vitals(s)
+                msg = {
+                    "type": "sandbox_frame",
+                    "run_id": run_id,
+                    "t": frame.timestamp,
+                    "progress": frame.timestamp / duration,
+                    "fault_onset_t": fault_onset if fault else None,
+                    "fault_active": frame.fault_active,
+                    "subsystems": {
+                        "EPS": {
+                            "battery_soc":        s.eps.battery_soc,
+                            "bus_voltage":         s.eps.bus_voltage,
+                            "solar_array_current": s.eps.solar_array_current,
+                            "load_current":        s.eps.load_current,
+                        },
+                        "TCS": {
+                            "panel_temp":    s.tcs.panel_temp,
+                            "battery_temp":  s.tcs.battery_temp,
+                            "heater_on":     s.tcs.heater_active,
+                        },
+                        "ADCS": {
+                            "attitude_error":       s.adcs.attitude_error,
+                            "reaction_wheel_speed": s.adcs.reaction_wheel_speed,
+                        },
+                        "TTC": {
+                            "signal_strength":         s.ttc.signal_strength,
+                            "bit_error_rate":           s.ttc.bit_error_rate,
+                            "ground_contact_remaining": s.ttc.ground_contact_remaining,
+                        },
+                        "OBC": {
+                            "cpu_load":        s.obc.cpu_load,
+                            "memory_used_pct": round((1 - s.obc.free_memory_mb / 512) * 100, 1),
+                        },
+                        "PROP": {
+                            "fuel_remaining": s.propulsion.fuel_remaining,
+                            "thruster_temp":  s.propulsion.thruster_temp,
+                        },
+                    },
+                    "vitals": vitals,
+                }
+                await websocket.send_json(msg)
+
+            await websocket.send_json({"type": "sandbox_done", "run_id": run_id, "total_steps": total_steps})
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            log.error(f"Sandbox simulation error: {exc}")
+            try:
+                await websocket.send_json({"type": "sandbox_error", "message": str(exc)})
+            except Exception:
+                pass
+
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+
+            action = msg.get("action")
+            if action == "start":
+                # Cancel any running simulation first
+                if active_task and not active_task.done():
+                    active_task.cancel()
+                    try:
+                        await active_task
+                    except asyncio.CancelledError:
+                        pass
+                run_id = msg.get("run_id", "A")
+                active_task = asyncio.create_task(run_simulation(msg, run_id))
+
+            elif action == "stop":
+                if active_task and not active_task.done():
+                    active_task.cancel()
+                    try:
+                        await active_task
+                    except asyncio.CancelledError:
+                        pass
+                await websocket.send_json({"type": "sandbox_stopped"})
+
+    except WebSocketDisconnect:
+        if active_task and not active_task.done():
+            active_task.cancel()
+
 
 if __name__ == "__main__":
     uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)

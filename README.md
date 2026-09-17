@@ -1,108 +1,236 @@
-# AERO-ASTRA
+# 🛰️ Aero-Astra — Autonomous Satellite Fault Management System
 
-Autonomous multi-agent AI system for satellite fault detection, diagnosis, and recovery. Built for Smart Horizon 2026 (Team Serenitians, SH-DST-01).
-
-Takes a satellite anomaly from detection to a physics-validated, human-approvable recovery plan in **under 10 seconds** (measured, not a target) — versus the 15-minute to 48-hour manual triage that's standard in real satellite operations today.
-
-See [`pitch.md`](pitch.md) for the full narrative (problem → what we tried first → why → what we built → results) and [`pptcontent.md`](pptcontent.md) for verified slide-by-slide deck content.
+A real-time, multi-agent AI system for satellite anomaly detection, root-cause diagnosis, and autonomous mitigation planning. Built on a **FastAPI** backend with a **React/Vite** frontend, it orchestrates five specialist AI agents over a live WebSocket telemetry stream.
 
 ---
 
 ## Architecture
 
-An 8-agent pipeline, each stage owning exactly one part of Detect → Diagnose → Simulate → Plan → Gate → Log:
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        React / Vite  (port 5173)                │
+│  Dashboard · Agent Console · Oracle 3-D View · Sandbox         │
+└────────────────────┬────────────────────────────────────────────┘
+                     │  WebSocket  ws://localhost:8000/ws
+┌────────────────────▼────────────────────────────────────────────┐
+│                   FastAPI Backend  (port 8000)                   │
+│                                                                  │
+│  SENTINEL  ──►  SHERLOCK  ──►  ORACLE  ──►  ATHENA  ──►  GUARDIAN│
+│  (anomaly      (root-cause     (MC sim)    (mitigation  (safety  │
+│   detect)       diagnosis)                  planning)    gate)   │
+│                                                                  │
+│  CHRONICLE (always-on audit log)   SCRIBE (runbook compiler)    │
+└──────────┬──────────────────────────────────┬───────────────────┘
+           │  OpenAI-compat REST               │  OpenAI-compat REST
+  ┌────────▼────────┐                ┌─────────▼─────────┐
+  │  MLX-LM :8080   │                │  MLX-LM :8081     │
+  │  (SHERLOCK LLM) │                │  (ATHENA LLM)     │
+  └─────────────────┘                └───────────────────┘
+        Llama 3.2 3B-4bit                Llama 3.1 8B-4bit
+      + Llama 3.2 1B draft            (standard inference)
+     (speculative decoding)
+```
 
-| Agent | Role | How |
+Agents are **manually activated** from the UI — SENTINEL and CHRONICLE run continuously; SHERLOCK, ORACLE, and ATHENA fire only when the operator clicks **▶ Activate** on their respective pages.
+
+---
+
+## Prerequisites
+
+### Hardware
+| Requirement | Minimum | Recommended |
 |---|---|---|
-| **VITALS** | Continuous health scoring | Deterministic per-subsystem thresholds, runs every second regardless of active faults |
-| **SENTINEL** | Anomaly detection | XGBoost (trained on real ESA OPSSAT-AD data) + physics-based spike filter + residual-correlation detector — 3 engines, no single one catches everything alone |
-| **SHERLOCK** | Root-cause diagnosis | 18-edge NetworkX causal graph computes the physically valid candidate set (no LLM), Gemini 2.5 Flash reasons within that set, output is rejected/reprompted if it steps outside it |
-| **ORACLE** | Recovery simulation | 100-run Monte Carlo per candidate action against a 6-subsystem coupled-ODE physics digital twin — zero LLM |
-| **ATHENA** | Recovery planning | Gemini 2.5 Flash + RAG retrieval (ChromaDB, NASA/ESA FDIR handbook) turns ORACLE's winning simulation into a human-readable procedure |
-| **GUARDIAN** | Safety gate | Deterministic 5-rule engine (time-to-critical, urgency, irreversibility, safety-score floor) — decides AUTONOMOUS_SAFED / AUTOMATED_GUARDED / MANUAL_INTERLOCK |
-| **CHRONICLE** | Event log | Streams every agent decision over WebSocket, timestamped |
-| **SCRIBE** | Audit runbook | Aggregates the full decision trail into an auditable record |
+| CPU | Any modern x86-64 or ARM64 | Apple Silicon (M1/M2/M3/M4) |
+| RAM | 8 GB | 16 GB |
+| Disk | 20 GB free | 40 GB free |
+| GPU | — | Apple Silicon unified memory (for MLX) |
 
-The one hard architectural rule: **LLMs reason, they never compute a safety number.** Anything that's actually a calculation (health scores, simulation outcomes, safety thresholds) is deterministic code. Gemini is only in the loop for causal narrative and procedure writing.
+> **Note:** MLX local inference only works on **Apple Silicon Macs**. On other hardware the backend automatically falls back to **Ollama**, **OpenRouter**, or **NVIDIA NIM** (see LLM Providers below).
 
----
+### Software
 
-## Tech stack
-
-- **Backend:** Python, FastAPI + Uvicorn, async WebSocket bridge
-- **LLM:** Gemini 2.5 Flash, called directly via Google's `genai` SDK (not routed through a gateway)
-- **ML:** XGBoost, scikit-learn — trained on real ESA OPSSAT-AD telemetry
-- **Physics:** Custom NumPy-vectorized digital twin, 6 coupled subsystems
-- **Retrieval:** ChromaDB — ATHENA's RAG pipeline over a NASA/ESA FDIR handbook
-- **Frontend:** React 18 + Vite, Three.js / React-Three-Fiber (3D mission control), Framer Motion
+| Tool | Version | Install |
+|---|---|---|
+| Python | 3.11 – 3.13 | [python.org](https://python.org) or `brew install python` |
+| Node.js | 18+ | [nodejs.org](https://nodejs.org) or `brew install node` |
+| npm | 9+ | Bundled with Node.js |
+| git | any | `brew install git` |
 
 ---
 
-## Running it locally
+## Setup
 
-Two processes, both on one machine — no cloud infrastructure beyond the LLM API key.
-
-### 1. Backend
+### 1. Clone the repository
 
 ```bash
+git clone https://github.com/Meet-Shah10/Aero_Astra.git
+cd Aero_Astra
+```
+
+### 2. Python environment
+
+```bash
+# Create and activate a virtual environment (recommended)
 python3 -m venv .venv
-source .venv/bin/activate          # .venv\Scripts\activate on Windows
-pip install -r backend/requirements.txt
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+
+# Install Python dependencies
+pip install -r requirements.txt
 ```
 
-Create `backend/.env`:
-```
-GEMINI_API_KEY=your-google-ai-studio-key
-```
-Get a key at [aistudio.google.com](https://aistudio.google.com/apikey). Note: the free tier caps at **20 requests/day per model** — each anomaly run costs at least 2 calls (SHERLOCK + ATHENA). Budget rehearsals accordingly, or upgrade to a paid tier before a live demo.
-
-Run from the repo root (module path matters — `backend.api`, not `api`):
-```bash
-uvicorn backend.api:app --host 0.0.0.0 --port 8000 --reload
-```
-
-### 2. Frontend
+### 3. Node / Frontend dependencies
 
 ```bash
 npm install
+```
+
+### 4. Environment variables
+
+Create a `.env` file in the project root. Only the providers you actually want to use need keys — the backend tries them in order and falls back automatically.
+
+```env
+# ── OpenRouter (cloud LLM fallback) ──────────────────────────────
+OPENROUTER_API_KEY=sk-or-...
+
+# ── NVIDIA NIM (optional cloud fallback) ─────────────────────────
+NVIDIA_API_KEY=nvapi-...
+
+# ── Ollama (local, no key needed — install from https://ollama.ai) ──
+# No key required. Run: ollama pull llama3.2:3b && ollama pull mistral-nemo:12b
+```
+
+> At least one provider must be reachable. For a fully **offline** setup, install Ollama and pull the models — no API keys needed.
+
+### 5. LLM Providers (choose one or more)
+
+The backend tries providers in this priority order:
+
+| Priority | Provider | When to use |
+|---|---|---|
+| 1 | **MLX-LM** (local, Apple Silicon) | Fastest; requires model download (Step 6) |
+| 2 | **Ollama** (local, any OS) | Good offline option; no GPU required |
+| 3 | **OpenRouter** | Cloud fallback; needs `OPENROUTER_API_KEY` |
+| 4 | **NVIDIA NIM** | Cloud fallback; needs `NVIDIA_API_KEY` |
+
+#### Option A — MLX local inference (Apple Silicon only)
+
+Download quantised model weights (~2–5 GB each):
+
+```bash
+bash mlx_setup.sh
+```
+
+Or manually with the MLX CLI:
+
+```bash
+pip install mlx-lm
+mlx_lm.convert --hf-path meta-llama/Llama-3.2-3B-Instruct -q --q-bits 4 \
+    --mlx-path backend/models/llama3.2-3b-4bit
+mlx_lm.convert --hf-path meta-llama/Llama-3.2-1B-Instruct -q --q-bits 4 \
+    --mlx-path backend/models/llama3.2-1b-4bit
+mlx_lm.convert --hf-path meta-llama/Llama-3.1-8B-Instruct -q --q-bits 4 \
+    --mlx-path backend/models/llama3.1-8b-4bit
+```
+
+#### Option B — Ollama (any OS)
+
+```bash
+# Install Ollama from https://ollama.ai, then:
+ollama pull llama3.2:3b        # for SHERLOCK
+ollama pull mistral-nemo:12b   # for ATHENA
+```
+
+---
+
+## Running the System
+
+Open **three terminal tabs**:
+
+### Tab 1 — MLX inference servers (Apple Silicon only, skip for Ollama/cloud)
+
+```bash
+python backend/mlx_servers.py
+# Starts SHERLOCK server on :8080 and ATHENA server on :8081
+```
+
+### Tab 2 — FastAPI backend
+
+```bash
+python backend/api.py
+# Runs on http://localhost:8000
+# WebSocket: ws://localhost:8000/ws
+```
+
+### Tab 3 — React frontend
+
+```bash
 npm run dev
+# Opens at http://localhost:5173
 ```
 
-Opens on `http://localhost:5173` (or the next free port) and connects to the backend's `ws://localhost:8000/ws`.
-
-### Verifying it's actually working
-
-The backend logs its own health on startup — look for:
-```
-SherlockAgent initialised | model=gemini-2.5-flash | ... | via Gemini API (direct)
-AthenaAgent initialised | model=gemini-2.5-flash | ... | via Gemini API (direct)
-```
-If either of those lines is missing (or you see `EnvironmentError`/an auth error instead), the key isn't resolving — check `backend/.env` has `GEMINI_API_KEY` set. When the key is missing, the server still starts and streams telemetry/SENTINEL/VITALS, but SHERLOCK/ATHENA fall back to a clearly-labeled offline stub instead of crashing.
+Navigate to **http://localhost:5173** in your browser.
 
 ---
 
-## Project structure
+## Usage Flow
+
+1. **Launch** — the dashboard loads and the telemetry replay begins streaming.
+2. **Wait for SENTINEL** — within ~6 seconds, SENTINEL detects the injected fault. The stream **freezes** at the fault frame and the agent console highlights.
+3. **Click SHERLOCK** — navigate to the SHERLOCK agent page and click **▶ Activate SHERLOCK**. The LLM diagnoses the root cause. The stream resumes automatically.
+4. **Click ATHENA** — navigate to the ATHENA page and click **▶ Activate ATHENA**. ORACLE runs a Monte-Carlo simulation, then ATHENA generates a mitigation plan.
+5. **GUARDIAN** fires automatically after SHERLOCK — it classifies the severity tier (`AUTOMATED_GUARDED`, `MANUAL_INTERLOCK`, or `AUTONOMOUS_SAFED`).
+6. **Approve & execute** — on the GUARDIAN page, approve the plan. SCRIBE compiles the audit runbook, which can be downloaded as a `.txt` file.
+
+---
+
+## Project Structure
 
 ```
-backend/
-  api.py              — FastAPI + WebSocket bridge, orchestrates the full pipeline
-  vitals/  sentinel/  sherlock/  oracle/  athena/  guardian/  — one package per agent
-  simulator/          — the physics digital twin
-  data/               — OPSSAT-AD, Mars Express (offline calibration only)
-  evaluation_results.md — real measured metrics, not projections
-
-src/
-  App.jsx             — main dashboard, WebSocket client, scenario injection
-  components/         — 3D viewer, VITALS gauges, ORACLE panels, agent detail pages
-
-pitch.md              — judge-facing presentation script, slide-by-slide
-pptcontent.md         — fact-checked corrections/content for the PPT deck
+Aero_Astra/
+├── backend/
+│   ├── api.py                  # FastAPI app — WebSocket, endpoints, replay loop
+│   ├── mlx_servers.py          # Launches MLX-LM inference servers
+│   ├── llm_client.py           # Multi-provider LLM client with fallback chain
+│   ├── sherlock/               # SHERLOCK agent (root-cause diagnosis)
+│   │   ├── agent.py
+│   │   ├── prompts.py
+│   │   └── graph.py            # Satellite dependency graph (6 nodes, 18 edges)
+│   ├── athena/                 # ATHENA agent (mitigation planning + RAG)
+│   │   ├── agent.py
+│   │   └── rag/                # NASA-HDBK-1002 vectorstore
+│   ├── sentinel/               # SENTINEL anomaly detectors (Engine A/B/C)
+│   ├── oracle/                 # ORACLE Monte-Carlo simulator
+│   ├── simulator/              # Physics-based satellite telemetry engine
+│   ├── replay/                 # Pre-recorded telemetry playlist (playlist.json)
+│   └── models/                 # Sentinel ML models + MLX weights (gitignored)
+├── src/
+│   ├── App.jsx                 # Root React component, WebSocket state machine
+│   ├── components/
+│   │   ├── AgentDetailPage.jsx # Per-agent detail views + activation buttons
+│   │   ├── oracle/             # 3-D orbital visualiser
+│   │   └── sandbox/            # Simulation sandbox (digital twin)
+│   └── index.css
+├── public/
+├── requirements.txt
+├── package.json
+└── vite.config.js
 ```
 
 ---
 
-## Data sources — the honest version
+## Troubleshooting
 
-No operational satellite publishes live fault telemetry — it's proprietary, often a security concern. The one real exception is **ESA's OPS-SAT** (launched 2019, an open experimentation platform) and its public **OPSSAT-AD** labeled anomaly dataset (Zenodo, DOI: 10.5281/zenodo.10624588), which SENTINEL's XGBoost engine is trained on. Mars Express thermal telemetry (ESA Planetary Science Archive) is used offline to calibrate the physics digital twin's thermal constants — not streamed live. Where neither dataset covers a fault type (thruster faults, power cascades), the physics twin fills the gap, calibrated against the real data available rather than invented from scratch.
+| Symptom | Fix |
+|---|---|
+| `Out of diskspace` on `git add` | Free disk space; MLX models can be 5–10 GB each |
+| Screen goes black on agent click | Ensure backend is running; check browser console for JS errors |
+| SHERLOCK button not appearing | Wait for SENTINEL to fire (~6 s after backend start) |
+| `LLM call failed` in backend logs | Check `.env` keys; or start Ollama as a fallback |
+| ChromaDB collection empty | Delete `backend/athena/rag/vectorstore/` and restart backend to rebuild |
+| Port 8080/8081 already in use | Kill any leftover `mlx_lm.server` processes: `pkill -f mlx_lm` |
 
-See `pitch.md` §3-4 for the full story of why this dataset choice, not a live feed, is what the system is actually built on.
+---
+
+## License
+
+MIT

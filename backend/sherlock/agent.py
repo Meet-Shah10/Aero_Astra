@@ -99,8 +99,13 @@ class SherlockAgent:
         telemetry_provider: TelemetryProvider | None = None,
     ) -> None:
         # Build multi-provider fallback chain:
-        # OpenRouter (OPENROUTER_API_KEY) → NVIDIA NIM (NVIDIA_API_KEY)
-        self._providers: list[LLMProvider] = build_clients(ollama_model=ollama_model, openrouter_model=model)
+        # Priority: MLX-LM port 8080 (Llama 3.2 speculative) → Ollama → OpenRouter → NVIDIA NIM
+        # Constraint: mlx_port=8080 ensures the tokenizer family stays in the Llama 3.2 line.
+        self._providers: list[LLMProvider] = build_clients(
+            mlx_port=8080,
+            ollama_model=ollama_model,
+            openrouter_model=model,
+        )
         self._temperature = temperature
         self._max_retries = max_retries
         self._candidate_depth = candidate_depth
@@ -275,7 +280,7 @@ class SherlockAgent:
             max_tokens=DEFAULT_MAX_TOKENS,
             temperature=self._temperature,
         )
-        log.debug("LLM raw response: %s", raw[:300])
+        log.info("LLM raw response (first 500 chars): %s", raw[:500])
         return raw
 
     def _try_parse_json(self, raw: str) -> tuple[dict[str, Any] | None, str | None]:
@@ -299,6 +304,18 @@ class SherlockAgent:
             parsed = json.loads(cleaned)
             if not isinstance(parsed, dict):
                 return None, f"Expected JSON object, got {type(parsed).__name__}"
+
+            # ── Schema-envelope unwrap ─────────────────────────────────────────
+            # Small models sometimes echo the JSON Schema structure back instead
+            # of returning a flat instance. Detect and unwrap:
+            #   { "type": "object", "required": [...], "properties": { ... } }
+            if (
+                parsed.get("type") == "object"
+                and isinstance(parsed.get("properties"), dict)
+                and isinstance(parsed.get("required"), list)
+            ):
+                parsed = parsed["properties"]
+
             return parsed, None
         except json.JSONDecodeError as e:
             return None, str(e)

@@ -1,0 +1,479 @@
+/* ══════════════════════════════════════════════════════
+   SIMULATION SANDBOX  —  Dark glassmorphism UI
+   ══════════════════════════════════════════════════════ */
+
+.sandbox-root {
+  display: grid;
+  grid-template-columns: 220px 1fr 240px;
+  gap: 12px;
+  height: 100%;
+  overflow: hidden;
+  padding: 12px;
+  box-sizing: border-box;
+  font-family: var(--font-mono, 'Fira Mono', monospace);
+}
+
+/* ── Left panel ── */
+.sandbox-left {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.sandbox-config {
+  background: rgba(14, 18, 38, 0.7);
+  border: 1px solid #1e2d4a;
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sandbox-config-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: #3B82F6;
+  margin-bottom: 4px;
+}
+
+.sandbox-section-label {
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  color: #64748B;
+  margin-top: 6px;
+  text-transform: uppercase;
+}
+
+.sandbox-value {
+  color: #94A3B8;
+  font-weight: 600;
+}
+
+.sandbox-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sandbox-preset-btn {
+  background: rgba(30, 45, 74, 0.6);
+  border: 1px solid #1e2d4a;
+  border-radius: 6px;
+  color: #94A3B8;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  padding: 5px 8px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.sandbox-preset-btn:hover {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: #3B82F6;
+  color: #e2e8f0;
+}
+
+.sandbox-select {
+  background: rgba(14, 18, 38, 0.8);
+  border: 1px solid #1e2d4a;
+  border-radius: 6px;
+  color: #CBD5E1;
+  font-size: 9px;
+  padding: 6px 8px;
+  width: 100%;
+  cursor: pointer;
+  outline: none;
+}
+
+.sandbox-select:focus {
+  border-color: #3B82F6;
+}
+
+.sandbox-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sandbox-slider {
+  width: 100%;
+  accent-color: #3B82F6;
+  cursor: pointer;
+}
+
+.sandbox-slider:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sandbox-speed-row {
+  display: flex;
+  gap: 4px;
+}
+
+.sandbox-speed-btn {
+  flex: 1;
+  background: rgba(30, 45, 74, 0.6);
+  border: 1px solid #1e2d4a;
+  border-radius: 5px;
+  color: #64748B;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 5px 0;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.sandbox-speed-btn.active {
+  background: rgba(59, 130, 246, 0.25);
+  border-color: #3B82F6;
+  color: #3B82F6;
+}
+
+.sandbox-speed-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sandbox-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.sandbox-btn {
+  flex: 1;
+  padding: 7px 0;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  transition: all 0.18s;
+}
+
+.sandbox-btn-run {
+  background: linear-gradient(135deg, #1a4fd6, #0e3ab8);
+  border-color: #3B82F6;
+  color: #e2e8f0;
+}
+
+.sandbox-btn-run:hover {
+  filter: brightness(1.15);
+}
+
+.sandbox-btn-stop {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: #EF4444;
+  color: #EF4444;
+}
+
+.sandbox-btn-stop:hover {
+  background: rgba(239, 68, 68, 0.3);
+}
+
+.sandbox-btn-compare {
+  background: rgba(30, 45, 74, 0.6);
+  border-color: #1e2d4a;
+  color: #64748B;
+  font-size: 9px;
+}
+
+.sandbox-btn-compare.active,
+.sandbox-btn-compare:hover {
+  background: rgba(255, 160, 64, 0.15);
+  border-color: #FFA040;
+  color: #FFA040;
+}
+
+.sandbox-compare-note {
+  font-size: 9px;
+  color: #64748B;
+  background: rgba(255, 160, 64, 0.07);
+  border: 1px solid rgba(255, 160, 64, 0.2);
+  border-radius: 6px;
+  padding: 8px;
+  line-height: 1.5;
+}
+
+.sandbox-legend {
+  display: flex;
+  align-items: center;
+  font-size: 9px;
+  color: #64748B;
+  margin-top: 6px;
+  gap: 4px;
+}
+
+.sandbox-legend-dot {
+  display: inline-block;
+  width: 10px;
+  height: 3px;
+  border-radius: 2px;
+}
+
+/* Status banner */
+.sandbox-status-banner {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  padding: 6px 10px;
+  border-radius: 6px;
+  text-align: center;
+  border: 1px solid transparent;
+}
+
+.sandbox-status-idle {
+  color: #475569;
+  border-color: #1e2d4a;
+}
+
+.sandbox-status-running {
+  color: #00E5A0;
+  border-color: rgba(0, 229, 160, 0.3);
+  background: rgba(0, 229, 160, 0.05);
+  animation: sandbox-pulse 1.5s ease-in-out infinite;
+}
+
+.sandbox-status-done {
+  color: #3B82F6;
+  border-color: rgba(59, 130, 246, 0.4);
+  background: rgba(59, 130, 246, 0.07);
+}
+
+.sandbox-status-stopped {
+  color: #FFA040;
+  border-color: rgba(255, 160, 64, 0.3);
+}
+
+.sandbox-status-error {
+  color: #EF4444;
+  border-color: rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.06);
+}
+
+@keyframes sandbox-pulse {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.6;
+  }
+}
+
+.sandbox-progress-area {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sandbox-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sandbox-progress-row {
+  display: flex;
+  justify-content: space-between;
+}
+
+.sandbox-progress-label {
+  font-size: 9px;
+  color: #64748B;
+  letter-spacing: 0.1em;
+}
+
+.sandbox-progress-pct {
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.sandbox-progress-track {
+  height: 4px;
+  background: #1e2d4a;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.sandbox-progress-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.2s ease;
+}
+
+/* Final metrics */
+.sandbox-final-metrics {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sandbox-metrics-card {
+  border: 1px solid;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: rgba(14, 18, 38, 0.6);
+}
+
+.sandbox-metrics-run-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  margin-bottom: 6px;
+}
+
+.sandbox-metric-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: #94A3B8;
+  padding: 2px 0;
+}
+
+.sandbox-metric-row span:last-child {
+  font-weight: 600;
+}
+
+/* ── Centre panel ── */
+.sandbox-centre {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sandbox-charts-header {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: #3B82F6;
+  padding: 6px 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sandbox-fault-badge {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #FF4444;
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 8px;
+  animation: sandbox-pulse 1.2s ease-in-out infinite;
+}
+
+.sandbox-charts-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: repeat(3, 1fr);
+  gap: 8px;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Individual chart card */
+.sandbox-chart {
+  background: rgba(10, 14, 30, 0.75);
+  border: 1px solid #1e2d4a;
+  border-radius: 8px;
+  padding: 6px 8px 4px;
+  display: flex;
+  flex-direction: column;
+}
+
+.sandbox-chart-label {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: #475569;
+  margin-bottom: 2px;
+  text-transform: uppercase;
+}
+
+/* ── Right panel ── */
+.sandbox-right {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.sandbox-3d-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: #3B82F6;
+}
+
+.sandbox-state-overlay {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: rgba(10, 14, 30, 0.7);
+  border: 1px solid #1e2d4a;
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+
+.sandbox-state-row {
+  font-size: 9px;
+  color: #64748B;
+}
+
+.sandbox-state-row b {
+  color: #CBD5E1;
+  margin-left: 4px;
+}
+
+.sandbox-vitals-title {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: #00E5A0;
+}
+
+.sandbox-health-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.sandbox-health-gauge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.sandbox-health-label {
+  font-size: 8px;
+  color: #64748B;
+  letter-spacing: 0.1em;
+}
+
+.sandbox-no-vitals {
+  font-size: 9px;
+  color: #475569;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.sandbox-offline-note {
+  font-size: 9px;
+  color: #FFA040;
+  background: rgba(255, 160, 64, 0.07);
+  border: 1px solid rgba(255, 160, 64, 0.25);
+  border-radius: 6px;
+  padding: 8px 10px;
+  line-height: 1.5;
+}

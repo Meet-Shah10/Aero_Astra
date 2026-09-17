@@ -76,8 +76,13 @@ const ModelInner = ({
   lockYaw,
   lockPitch,
   zoomTarget,
-  onLoaded
+  onLoaded,
+  sandboxState,       // { attitude_error, panel_temp, battery_soc, solar_array_current, fault_active }
 }) => {
+  // Keep a mutable ref so the useFrame closure always reads the latest value
+  // without triggering re-renders.
+  const sandboxStateRef = useRef(sandboxState);
+  useEffect(() => { sandboxStateRef.current = sandboxState; }, [sandboxState]);
   const outer = useRef(null);
   const inner = useRef(null);
   const { camera, gl } = useThree();
@@ -301,13 +306,6 @@ const ModelInner = ({
     cHov.current.x += (tHov.current.x - cHov.current.x) * HOVER_EASE;
     cHov.current.y += (tHov.current.y - cHov.current.y) * HOVER_EASE;
 
-    const ndc = pivotW.current.clone().project(camera);
-    
-    // REMOVED FOR IN-PLACE ROTATION:
-    // ndc.x += xOff + cPar.current.x;
-    // ndc.y += yOff + cPar.current.y;
-    // outer.current.position.copy(ndc.unproject(camera));
-    
     // FIX: Keep it exactly at origin (for rotation) but apply manual positional offsets
     outer.current.position.set(xOff, yOff, 0);
 
@@ -317,9 +315,6 @@ const ModelInner = ({
     }
 
     if (lockRotation) {
-      // Converge to a fixed, deterministic pose instead of freezing wherever
-      // autoRotate/drag last left it — so overlays anchored to the model
-      // (e.g. a fault-location marker) land on the same spot every time.
       outer.current.rotation.y = lerpAngle(outer.current.rotation.y, lockYaw, 0.05);
       outer.current.rotation.x = lerpAngle(outer.current.rotation.x, lockPitch, 0.05);
       vel.current.x = 0;
@@ -339,6 +334,55 @@ const ModelInner = ({
       vel.current.x *= INERTIA;
       vel.current.y *= INERTIA;
       if (Math.abs(vel.current.x) > 1e-4 || Math.abs(vel.current.y) > 1e-4) need = true;
+    }
+
+    // ── Sandbox state wiring ────────────────────────────────────────────────
+    // When sandboxState is provided, we overlay simulation physics onto the
+    // 3D model: attitude error tilts the satellite, panel temperature changes
+    // the mesh colour (white→orange→red), eclipse dims the panels.
+    const ss = sandboxStateRef.current;
+    if (ss && inner.current) {
+      // Attitude error → X-axis tilt (1° attitude error = 1° model tilt)
+      // Clamp to ±60° so the model stays visible.
+      const attRad = THREE.MathUtils.clamp(
+        deg2rad(ss.attitude_error ?? 0), -deg2rad(60), deg2rad(60)
+      );
+      inner.current.rotation.x = THREE.MathUtils.lerp(inner.current.rotation.x, attRad, 0.06);
+      need = true;
+
+      // Panel temperature → mesh colour tint
+      // 0–49°C: white (1,1,1), 49–80°C: white→orange, 80–120°C: orange→red
+      const temp = ss.panel_temp ?? 25;
+      const eclipse = (ss.solar_array_current ?? 7.5) < 0.5;
+      let r = 1, g = 1, b = 1;
+      if (eclipse) {
+        // In eclipse: dim to dark-blue-grey
+        r = 0.25; g = 0.30; b = 0.40;
+      } else if (temp > 80) {
+        // Hot: full red
+        const t = Math.min((temp - 80) / 40, 1);
+        r = 1; g = THREE.MathUtils.lerp(0.5, 0.1, t); b = 0.1;
+      } else if (temp > 49) {
+        // Warning: orange
+        const t = (temp - 49) / 31;
+        r = 1; g = THREE.MathUtils.lerp(1, 0.5, t); b = THREE.MathUtils.lerp(1, 0.1, t);
+      }
+      // Battery SOC → overall brightness (dim when low)
+      const soc = ss.battery_soc ?? 0.85;
+      const brightness = 0.4 + 0.6 * soc;
+      r *= brightness; g *= brightness; b *= brightness;
+
+      inner.current.traverse(o => {
+        if (o.isMesh && o.material) {
+          const m = o.material;
+          if (m.color) m.color.setRGB(r, g, b);
+        }
+      });
+    } else if (!ss && inner.current) {
+      // Reset colours when sandbox not active
+      inner.current.traverse(o => {
+        if (o.isMesh && o.material?.color) o.material.color.setRGB(1, 1, 1);
+      });
     }
 
     if (
@@ -377,6 +421,7 @@ const ModelViewer = ({
   enableManualRotation = true,
   enableHoverRotation = true,
   enableManualZoom = true,
+  sandboxState = null,   // { attitude_error, panel_temp, battery_soc, solar_array_current, fault_active }
   ambientIntensity = 0.3,
   keyLightIntensity = 1,
   fillLightIntensity = 0.5,
@@ -506,6 +551,7 @@ const ModelViewer = ({
             lockPitch={lockPitch}
             zoomTarget={zoomTarget}
             onLoaded={onModelLoaded}
+            sandboxState={sandboxState}
           />
         </Suspense>
 

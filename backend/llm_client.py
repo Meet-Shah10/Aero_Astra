@@ -6,28 +6,33 @@ When one provider fails with a quota/credit error (HTTP 402 or 429),
 the next provider in the chain is tried automatically.
 
 Provider chain (in priority order):
-  1. Ollama (local)  — no key needed     (mistral-nemo:12b, fully offline)
-  2. OpenRouter      — OPENROUTER_API_KEY (google/gemini-2.5-flash)
-  3. NVIDIA NIM      — NVIDIA_API_KEY    (nvidia/nemotron-3-super-120b-a12b)
+  1. MLX-LM (local, Apple Silicon)  — mlx_servers.py must be running
+     ·  Sherlock → port 8080 (Llama 3.2 3B + 1B speculative draft)
+     ·  Athena   → port 8081 (Llama 3.1 8B + 1B speculative draft)
+  2. Ollama (local)  — no key needed (legacy fallback, always present)
+  3. OpenRouter      — OPENROUTER_API_KEY (google/gemini-2.5-flash)
+  4. NVIDIA NIM      — NVIDIA_API_KEY    (nvidia/nemotron-3-super-120b-a12b)
 
 Environment variables:
-  OLLAMA_BASE_URL   — Ollama server URL (default: http://localhost:11434/v1)
-  OLLAMA_MODEL      — Model tag to use  (default: mistral-nemo:12b)
+  MLX_SHERLOCK_URL  — MLX Sherlock server (default: http://localhost:8080/v1)
+  MLX_ATHENA_URL    — MLX Athena server   (default: http://localhost:8081/v1)
+  OLLAMA_BASE_URL   — Ollama server URL   (default: http://localhost:11434/v1)
+  OLLAMA_MODEL      — Model tag to use    (default: mistral-nemo:12b)
   OPENROUTER_API_KEY — OpenRouter key (optional, used as cloud fallback)
   NVIDIA_API_KEY    — NVIDIA NIM key   (optional, used as final fallback)
 
 Usage:
     from backend.llm_client import build_clients, call_llm_with_fallback
 
-    clients = build_clients()
-    raw = call_llm_with_fallback(clients, messages, max_tokens=2048, temperature=0.1)
+    # Sherlock (port 8080)
+    clients = build_clients(mlx_port=8080, ollama_model="llama3.2:3b")
+    raw = call_llm_with_fallback(clients, messages, max_tokens=512, temperature=0.10)
 """
-
-from __future__ import annotations
 
 import logging
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
 from openai import OpenAI, APIStatusError
@@ -37,6 +42,16 @@ log = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 # Provider definitions
 # ─────────────────────────────────────────────────────────────────────────────
+
+# mlx_lm.server uses the FULL LOCAL PATH of the model directory as the model ID
+# in its /v1/models response.  Any other string is treated as a HuggingFace repo
+# ID and triggers a live download — so we must send the exact absolute path.
+_MODELS_DIR = Path(__file__).resolve().parent / "models"
+_PORT_TO_MODEL: dict[int, str] = {
+    8080: str(_MODELS_DIR / "llama3.2-3b-4bit"),   # Sherlock TARGET
+    8081: str(_MODELS_DIR / "llama3.1-8b-4bit"),   # Athena TARGET
+}
+
 
 @dataclass
 class LLMProvider:
@@ -50,25 +65,48 @@ def build_clients(
     openrouter_model: str = "google/gemini-2.5-flash",
     nvidia_model: str = "nvidia/nemotron-3-super-120b-a12b",
     nvidia_model_2: str = "deepseek-ai/deepseek-v4-flash-0731",
+    mlx_port: int | None = None,
+    mlx_model: str | None = None,  # auto-derived from port if None
 ) -> list[LLMProvider]:
     """
     Build and return the ordered fallback chain of providers.
 
-    Ollama (local) is always tried first if the Ollama server is reachable.
-    Cloud providers are used as fallbacks when Ollama is unavailable.
+    MLX-LM (Apple Silicon native + speculative decoding) is tried first when
+    mlx_servers.py is running. Ollama is the local fallback. Cloud providers
+    are used when both local options are unavailable.
 
     Provider priority:
-      1. Ollama (local)  — ollama_model arg or OLLAMA_MODEL env var (default: mistral-nemo:12b)
-      2. OpenRouter      — OPENROUTER_API_KEY   — google/gemini-2.5-flash
-      3. NVIDIA NIM      — NVIDIA_API_KEY       — nemotron-3-super-120b-a12b
-      4. NVIDIA NIM      — NVIDIA_API_KEY       — deepseek-v4-flash-0731 (fallback)
+      1. MLX-LM (local, speculative)  — mlx_port controls which agent server
+      2. Ollama (local)               — ollama_model arg or OLLAMA_MODEL env var
+      3. OpenRouter                   — OPENROUTER_API_KEY — google/gemini-2.5-flash
+      4. NVIDIA NIM (primary)         — NVIDIA_API_KEY    — nemotron-3-super-120b-a12b
+      5. NVIDIA NIM (fallback)        — NVIDIA_API_KEY    — deepseek-v4-flash-0731
     """
     providers: list[LLMProvider] = []
 
-    # ── 1. Ollama (local, offline-first) ─────────────────────────────────────
-    # Ollama exposes an OpenAI-compatible API — no real key required.
-    # We probe it lazily; if the server isn't running, call_llm_with_fallback
-    # will catch the connection error and move to the next provider.
+    # ── 1. MLX-LM (Apple Silicon native with speculative decoding) ────────────
+    # mlx_lm.server exposes an OpenAI-compatible API on the given port.
+    # IMPORTANT: mlx_lm.server uses the full local model path as the model ID.
+    # Sending any other string causes the server to attempt a HuggingFace download.
+    if mlx_port is not None:
+        mlx_base = f"http://localhost:{mlx_port}/v1"
+    else:
+        mlx_base = os.environ.get("MLX_BASE_URL", "")
+
+    if mlx_base:
+        # Resolve model ID: caller-supplied path takes precedence, else derive from port.
+        resolved_mlx_model = mlx_model or _PORT_TO_MODEL.get(mlx_port or 0, "")
+        providers.append(LLMProvider(
+            name=f"MLX-LM (port {mlx_port or 'env'})",
+            client=OpenAI(
+                base_url=mlx_base,
+                api_key="mlx",   # mlx_lm.server ignores the key
+            ),
+            model=resolved_mlx_model,
+        ))
+        log.info("LLM provider registered: MLX-LM (port=%s, speculative decoding)", mlx_port)
+
+    # ── 2. Ollama (local fallback) ────────────────────────────────────────────
     ollama_base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
     resolved_ollama_model = ollama_model or os.environ.get("OLLAMA_MODEL", "mistral-nemo:12b")
     providers.append(LLMProvider(
@@ -81,7 +119,7 @@ def build_clients(
     ))
     log.info("LLM provider registered: Ollama local (model=%s, url=%s)", resolved_ollama_model, ollama_base)
 
-    # ── 2. OpenRouter (cloud fallback) ────────────────────────────────────────
+    # ── 3. OpenRouter (cloud fallback) ────────────────────────────────────────
     or_key = os.environ.get("OPENROUTER_API_KEY")
     if or_key:
         providers.append(LLMProvider(
@@ -94,7 +132,7 @@ def build_clients(
         ))
         log.info("LLM provider registered: OpenRouter (model=%s)", openrouter_model)
 
-    # ── 3. NVIDIA NIM (final cloud fallback) ──────────────────────────────────
+    # ── 4. NVIDIA NIM (final cloud fallback) ──────────────────────────────────
     nv_key = os.environ.get("NVIDIA_API_KEY")
     if nv_key:
         providers.append(LLMProvider(
@@ -128,11 +166,11 @@ def build_clients(
 # Also includes 503 (service unavailable) and 0 for connection errors (Ollama not running)
 _FALLBACK_CODES = {402, 410, 429, 503}
 
-# Hard wall for local Ollama calls (seconds). mistral-nemo:12b generates at
-# ~1 tok/s on M-series Apple Silicon, so 768 max_tokens ≈ 13 minutes worst-case.
-# Default 180s covers the typical 100-200 token response; set OLLAMA_TIMEOUT
-# in env to tune without a code change.
-# Cloud providers (OpenRouter, NVIDIA NIM) get a generous 120s instead.
+# Timeout tuning:
+#   MLX-LM: speculative decoding is much faster than Ollama — 60s is generous.
+#   Ollama: mistral-nemo:12b at ~1 tok/s means long responses can take minutes.
+#   Cloud:  OpenRouter/NVIDIA get 120s (network latency included).
+_MLX_TOTAL_TIMEOUT    = int(os.environ.get("MLX_TIMEOUT",    "60"))
 _OLLAMA_TOTAL_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "180"))
 _CLOUD_TOTAL_TIMEOUT  = 120
 
@@ -162,8 +200,14 @@ def call_llm_with_fallback(
     last_exc: Exception | None = None
 
     for provider in providers:
-        is_local = provider.name.startswith("Ollama")
-        total_timeout = _OLLAMA_TOTAL_TIMEOUT if is_local else _CLOUD_TOTAL_TIMEOUT
+        is_mlx   = provider.name.startswith("MLX")
+        is_local = provider.name.startswith("Ollama") or is_mlx
+        if is_mlx:
+            total_timeout = _MLX_TOTAL_TIMEOUT
+        elif provider.name.startswith("Ollama"):
+            total_timeout = _OLLAMA_TOTAL_TIMEOUT
+        else:
+            total_timeout = _CLOUD_TOTAL_TIMEOUT
         # httpx.Timeout(total) sets a hard wall on the entire request—including
         # streaming reads—so slow local generation can't hang indefinitely.
         http_timeout = httpx.Timeout(total_timeout, connect=10.0)

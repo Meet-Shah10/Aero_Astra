@@ -127,8 +127,13 @@ class AthenaAgent:
         max_retries: int = DEFAULT_MAX_RETRIES,
     ) -> None:
         # Build multi-provider fallback chain:
-        # OpenRouter (OPENROUTER_API_KEY) → NVIDIA NIM (NVIDIA_API_KEY)
-        self._providers: list[LLMProvider] = build_clients(ollama_model=ollama_model, openrouter_model=model)
+        # Priority: MLX-LM port 8081 (Mistral speculative) → Ollama → OpenRouter → NVIDIA NIM
+        # Constraint: mlx_port=8081 ensures the tokenizer family stays in the Mistral v3 line.
+        self._providers: list[LLMProvider] = build_clients(
+            mlx_port=8081,
+            ollama_model=ollama_model,
+            openrouter_model=model,
+        )
         self._temperature = temperature
         self._max_retries = max_retries
 

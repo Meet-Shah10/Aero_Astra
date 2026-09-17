@@ -159,6 +159,18 @@ TELEMETRY WINDOW (rows around anomaly):
 
     candidates_list = ", ".join(sorted(candidate_set))
 
+    # Concrete example output — shown instead of the raw JSON Schema so that
+    # small models produce a flat instance rather than echoing the schema.
+    example_output = json.dumps({
+        "primary_root_cause": sorted(candidate_set)[0],
+        "causal_chain": [sorted(candidate_set)[0], event.flagged_subsystem],
+        "affected_subsystems": [sorted(candidate_set)[0], event.flagged_subsystem],
+        "confidence_score": 0.80,
+        "urgency": "HIGH",
+        "time_to_critical_estimate_minutes": 30,
+        "reasoning": "Brief explanation referencing telemetry values.",
+    }, indent=2)
+
     return f"""ANOMALY EVENT:
   Anomaly ID       : {event.anomaly_id}
   Flagged Subsystem: {event.flagged_subsystem}
@@ -182,10 +194,10 @@ You MUST select primary_root_cause from this list: [{candidates_list}]
 Every node in causal_chain must be a known satellite subsystem \
 (EPS, TCS, ADCS, OBC, TT&C, Propulsion).
 
-REQUIRED OUTPUT SCHEMA:
-{RESPONSE_JSON_SCHEMA_STR}
+RETURN ONLY a flat JSON object with EXACTLY these 7 keys (no wrapper, no schema, no markdown):
+{example_output}
 
-Return ONLY the JSON object. No other text."""
+The keys must be at the TOP LEVEL of the object. Do NOT nest them inside "properties" or any other key. Start your response with {{ and end with }}."""
 
 
 # ─────────────────────────────────────────────────────────────────────────────

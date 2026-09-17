@@ -2,16 +2,19 @@
   flex: 1;
   display: flex;
   flex-direction: column;
+  min-height: 0;      /* critical: allows flex child to shrink below content size */
   padding: 32px 40px;
   overflow-y: auto;
   background: #030405;
 }
 
-/* ORACLE needs full-bleed layout — no outer padding, darker bg, scroll inside oracle-view */
+/* ORACLE/SANDBOX need full-bleed layout — no outer padding, scroll inside */
 .agent-page.agent-page--oracle {
   padding: 0;
   background: #06090E;
   overflow: hidden;
+  height: 100%;        /* allows children with height:100% to resolve */
+  min-height: 0;       /* prevents flex overflow */
 }
 
 .agent-page-header {
@@ -405,4 +408,10 @@
   border: 1px dashed #ff3b3b;
   padding: 8px 10px;
   border-radius: 4px;
+}
+
+
+/* Spinner keyframe for manual activation loading states */
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
