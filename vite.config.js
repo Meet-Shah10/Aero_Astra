@@ -5,6 +5,12 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+    },
     watch: {
       // .venv (Python backend deps, thousands of files) and the RAG
       // vectorstore have no reason to be watched by the frontend dev

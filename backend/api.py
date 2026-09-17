@@ -1015,11 +1015,10 @@ async def sherlock_trigger():
         "oracle_ready": True,
     })
 
-    # Resume the replay stream — it was frozen since SENTINEL fired so the
-    # user had unlimited time to read the fault telemetry and click Activate.
-    if _replay_resume_event is not None:
-        _replay_resume_event.set()
-        log.info("Replay stream RESUMED after SHERLOCK completion")
+    # Resume the replay stream only when ATHENA has also completed —
+    # moving set() here would resume before the user can activate ATHENA.
+    # Stream resumes at the end of /api/agent/athena/trigger instead.
+    log.info("SHERLOCK done — stream remains PAUSED until ATHENA activation")
 
     return {"status": "ok", "anomaly_id": anomaly.anomaly_id, "root_cause": diagnosis.primary_root_cause}
 
@@ -1084,6 +1083,10 @@ async def athena_trigger():
             "offline_fallback":   True,
             "options":            build_fallback_options(oracle_response),
         })
+        # Resume the stream now that both SHERLOCK + ATHENA (fallback) are done
+        if _replay_resume_event is not None:
+            _replay_resume_event.set()
+            log.info("Replay stream RESUMED after ATHENA (fallback) completion")
         return {"status": "ok", "mode": "fallback"}
 
     try:
@@ -1106,6 +1109,10 @@ async def athena_trigger():
                 for o in athena_plan.options
             ],
         })
+        # Resume the replay stream — both SHERLOCK + ATHENA are fully done
+        if _replay_resume_event is not None:
+            _replay_resume_event.set()
+            log.info("Replay stream RESUMED after ATHENA (LLM) completion")
         return {"status": "ok", "mode": "llm", "recommended_action": athena_plan.recommended_action}
     except Exception:
         log.exception("ATHENA trigger LLM failed")
@@ -1117,6 +1124,10 @@ async def athena_trigger():
             "offline_fallback":   True,
             "options":            build_fallback_options(oracle_response),
         })
+        # Resume even on LLM failure — don't leave the stream stuck forever
+        if _replay_resume_event is not None:
+            _replay_resume_event.set()
+            log.info("Replay stream RESUMED after ATHENA (LLM failed) completion")
         return {"status": "fallback", "mode": "llm_failed"}
 
 

@@ -506,6 +506,21 @@ function App() {
             case 'sherlock_diagnosis':
               setBackendData(prev => ({ ...prev, sherlock: msg }));
               setScenarioPhase(p => (p === 'detected' || p === 'nominal') ? 'diagnosing' : p);
+              // Update activeScenario with SHERLOCK's real multi-hop causal chain
+              // (replay_loop_start only sets [subsystem], a single node; without
+              // this update the graph renders blank after SHERLOCK runs).
+              if (Array.isArray(msg.causal_chain) && msg.causal_chain.length > 0) {
+                setActiveScenario(prev => prev ? {
+                  ...prev,
+                  causalChain: msg.causal_chain,
+                  rootCause: msg.primary_root_cause,
+                } : prev);
+                activeScenarioRef.current = activeScenarioRef.current ? {
+                  ...activeScenarioRef.current,
+                  causalChain: msg.causal_chain,
+                  rootCause: msg.primary_root_cause,
+                } : activeScenarioRef.current;
+              }
               setLogs(prev => [...prev,
               `> SHERLOCK: Root cause → ${msg.primary_root_cause}`,
               `> SHERLOCK: Urgency ${msg.urgency}, TTC ${msg.time_to_critical}min`,
@@ -1191,7 +1206,12 @@ function App() {
                       onActivateSherlock={async () => {
                         setSherlockLoading(true);
                         try {
-                          await fetch('/api/agent/sherlock/trigger', { method: 'POST' });
+                          const res = await fetch('/api/agent/sherlock/trigger', { method: 'POST' });
+                          if (!res.ok) {
+                            const err = await res.json().catch(() => ({}));
+                            console.error('SHERLOCK trigger returned non-OK status:', res.status, err);
+                            setSherlockLoading(false);
+                          }
                         } catch (e) {
                           console.error('SHERLOCK trigger failed', e);
                           setSherlockLoading(false);
@@ -1200,7 +1220,11 @@ function App() {
                       onActivateAthena={async () => {
                         setAthenaLoading(true);
                         try {
-                          await fetch('/api/agent/athena/trigger', { method: 'POST' });
+                          const res = await fetch('/api/agent/athena/trigger', { method: 'POST' });
+                          if (!res.ok) {
+                            const err = await res.json().catch(() => ({}));
+                            console.error('ATHENA trigger returned non-OK status:', res.status, err);
+                          }
                         } catch (e) {
                           console.error('ATHENA trigger failed', e);
                         }
