@@ -58,6 +58,7 @@ class LLMProvider:
     name: str
     client: OpenAI
     model: str
+    timeout_s: int = 90   # per-provider wall-clock timeout for generation
 
 
 def build_clients(
@@ -96,6 +97,12 @@ def build_clients(
     if mlx_base:
         # Resolve model ID: caller-supplied path takes precedence, else derive from port.
         resolved_mlx_model = mlx_model or _PORT_TO_MODEL.get(mlx_port or 0, "")
+        # Timeout budget per model size:
+        #   Port 8080 → Llama 3.2 3B (SHERLOCK) — fast speculative, 90s is enough.
+        #   Port 8081 → Llama 3.1 8B (ATHENA)   — larger model, needs up to 240s for
+        #               1536-token responses. Any other port gets a safe 180s default.
+        _port_timeout = {8080: 90, 8081: 240}
+        mlx_timeout = _port_timeout.get(mlx_port or 0, int(os.environ.get("MLX_TIMEOUT", "90")))
         providers.append(LLMProvider(
             name=f"MLX-LM (port {mlx_port or 'env'})",
             client=OpenAI(
@@ -103,8 +110,9 @@ def build_clients(
                 api_key="mlx",   # mlx_lm.server ignores the key
             ),
             model=resolved_mlx_model,
+            timeout_s=mlx_timeout,
         ))
-        log.info("LLM provider registered: MLX-LM (port=%s, speculative decoding)", mlx_port)
+        log.info("LLM provider registered: MLX-LM (port=%s, speculative decoding, timeout=%ds)", mlx_port, mlx_timeout)
 
     # ── 2. Ollama (local fallback) ────────────────────────────────────────────
     ollama_base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
@@ -167,10 +175,10 @@ def build_clients(
 _FALLBACK_CODES = {402, 410, 429, 503}
 
 # Timeout tuning:
-#   MLX-LM: speculative decoding is much faster than Ollama — 60s is generous.
+#   MLX-LM: per-provider (see LLMProvider.timeout_s — set in build_clients by port)
 #   Ollama: mistral-nemo:12b at ~1 tok/s means long responses can take minutes.
 #   Cloud:  OpenRouter/NVIDIA get 120s (network latency included).
-_MLX_TOTAL_TIMEOUT    = int(os.environ.get("MLX_TIMEOUT",    "60"))
+_MLX_TOTAL_TIMEOUT    = int(os.environ.get("MLX_TIMEOUT",    "90"))   # fallback if timeout_s unset
 _OLLAMA_TOTAL_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "180"))
 _CLOUD_TOTAL_TIMEOUT  = 120
 
@@ -201,9 +209,9 @@ def call_llm_with_fallback(
 
     for provider in providers:
         is_mlx   = provider.name.startswith("MLX")
-        is_local = provider.name.startswith("Ollama") or is_mlx
         if is_mlx:
-            total_timeout = _MLX_TOTAL_TIMEOUT
+            # Use per-provider budget set in build_clients (port-specific model size)
+            total_timeout = provider.timeout_s
         elif provider.name.startswith("Ollama"):
             total_timeout = _OLLAMA_TOTAL_TIMEOUT
         else:
