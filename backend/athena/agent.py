@@ -90,10 +90,11 @@ DEFAULT_MAX_RETRIES = 3
 # variation, but this is still safety-relevant; must stay below 0.2.
 DEFAULT_TEMPERATURE = 0.15
 
-# Kept compact for local Ollama inference (mistral-nemo:12b on M4 is ~1 tok/s).
-# 768 tokens fits 3 recovery options × 3 steps + reasoning without hanging.
-# Cloud models (OpenRouter/NVIDIA) generate this in <5s so no cost to them.
-DEFAULT_MAX_TOKENS  = 768
+# Llama 3.1 8B needs enough budget to produce 3 full options + reasoning CoT.
+# 768 was causing empty-body responses — the model ran out of generation budget
+# mid-JSON and mlx_lm returned an empty content string. 1536 is conservative
+# enough to finish a complete response without context-window overflow.
+DEFAULT_MAX_TOKENS  = 1536
 DEFAULT_MAX_RETRIES = 3
 
 # Valid operator effort strings (for schema validation)
@@ -366,6 +367,14 @@ class AthenaAgent:
             if raw.endswith("```"):
                 raw = raw[: raw.rfind("```")]    # drop closing ```
             raw = raw.strip()
+        # Guard against empty response — mlx_lm returns empty content when the
+        # model exhausts its generation budget before closing the JSON object.
+        # Raise so the retry loop picks up the next provider / reprompts.
+        if not raw:
+            raise ValueError(
+                "LLM returned empty response — likely token budget exhausted. "
+                "Check DEFAULT_MAX_TOKENS vs. prompt length."
+            )
         log.debug("ATHENA LLM raw response: %s", raw[:400])
         return raw
 

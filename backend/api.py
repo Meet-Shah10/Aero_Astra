@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 # Import modules from the project
-from backend.simulator.engine import simulate_scenario, simulate_scenario_stream
+from backend.simulator.engine import simulate_scenario, simulate_scenario_stream, _INITIAL_STATE
 from backend.simulator.schemas import SatelliteState
 from backend.sentinel.engines import SentinelPersistenceFilter, PhysicsSpikeFilter, ResidualCorrelationDetector, score_xgboost
 from backend.sherlock.agent import SherlockAgent
@@ -1188,7 +1188,6 @@ async def sandbox_websocket(websocket: WebSocket):
 
         # Build custom initial state from client config (battery_soc override).
         init_battery_soc = float(cfg.get("battery_soc", 0.85))
-        from backend.simulator.schemas import EPSState
         custom_initial = _INITIAL_STATE.model_copy(deep=True)
         custom_initial.eps = custom_initial.eps.model_copy(
             update={"battery_soc": max(0.05, min(1.0, init_battery_soc))}
