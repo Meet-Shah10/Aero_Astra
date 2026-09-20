@@ -222,11 +222,15 @@ function SherlockPage({ activeScenario, isAnomaly, hasIncidentData, liveTelemetr
   // chain[0] is always the true root (per FAULT_SCENARIOS) — rendered at the
   // top. chain[last] is the most downstream, visible symptom — at the
   // bottom, since that's what an operator actually sees first.
-  const chain = activeScenario ? activeScenario.causalChain : [];
+  const chain = activeScenario ? (activeScenario.causalChain ?? []) : [];
   const n = chain.length;
 
   useLayoutEffect(() => {
-    if (!isAnomaly || n === 0) return;
+    // Only animate when the graph is actually in the DOM — i.e. the
+    // awaitingActivation gate has dropped AND we have nodes to render.
+    // awaitingActivation is in the dep array so the effect fires when the
+    // gate clears, which is the moment the SVG DOM nodes first exist.
+    if (awaitingActivation || n === 0) return;
     setSelected(n - 1);
     nodeRefs.current = nodeRefs.current.slice(0, n);
     edgeRefs.current = edgeRefs.current.slice(0, n - 1);
@@ -251,7 +255,7 @@ function SherlockPage({ activeScenario, isAnomaly, hasIncidentData, liveTelemetr
     tl.call(() => setSelected(0));
 
     return () => tl.kill();
-  }, [activeScenario, isAnomaly, n, replayKey]);
+  }, [activeScenario, awaitingActivation, n, replayKey]);
 
   // ── Manual activation gate ────────────────────────────────────────────────
   // awaitingActivation is true when SENTINEL fired but SHERLOCK hasn't run yet.
