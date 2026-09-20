@@ -88,10 +88,10 @@ DEFAULT_MODEL       = "google/gemini-2.5-flash"
 # variation, but this is still safety-relevant; must stay below 0.2.
 DEFAULT_TEMPERATURE = 0.15
 
-# Llama 3.1 8B needs enough budget to produce 3 full options + reasoning CoT.
-# Must match mlx_servers.py ATHENA --max-tokens (2048). Lower budgets caused
-# empty-body / truncated mid-JSON responses from mlx_lm.
-DEFAULT_MAX_TOKENS  = 2048
+# NVIDIA NIM with 4096 max_tokens: enough for 3 full recovery options + CoT.
+# The previous 2048 limit caused truncation at char 228 on NVIDIA NIM
+# because nemotron-70b generates verbose JSON with full reasoning chains.
+DEFAULT_MAX_TOKENS  = 4096
 DEFAULT_MAX_RETRIES = 3
 
 # Valid operator effort strings (for schema validation)
@@ -417,6 +417,12 @@ class AthenaAgent:
             full_messages,
             max_tokens=DEFAULT_MAX_TOKENS,
             temperature=self._temperature,
+            # Force structurally valid JSON on cloud providers (NVIDIA NIM, OpenRouter).
+            # Eliminates two failure modes seen in production:
+            #   1. "Unterminated string" — model truncated mid-JSON at token limit
+            #   2. "Expecting ',' delimiter" — model appended prose after closing }
+            # Local providers (MLX, Ollama) skip this flag — they don't support it.
+            response_format={"type": "json_object"},
         )
         # Strip markdown code fences that Gemini often wraps JSON in
         if raw.startswith("```"):

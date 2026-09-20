@@ -188,16 +188,21 @@ def call_llm_with_fallback(
     messages: list[dict[str, str]],
     max_tokens: int = 2048,
     temperature: float = 0.1,
+    response_format: dict | None = None,
 ) -> str:
     """
     Call the LLM via the first available provider. On quota/credit errors
     (HTTP 402 or 429), fall back to the next provider in the chain.
 
     Args:
-        providers:    Ordered list from build_clients().
-        messages:     Full message list (system + user + assistant turns).
-        max_tokens:   Maximum tokens to generate.
-        temperature:  Sampling temperature.
+        providers:       Ordered list from build_clients().
+        messages:        Full message list (system + user + assistant turns).
+        max_tokens:      Maximum tokens to generate.
+        temperature:     Sampling temperature.
+        response_format: Optional OpenAI response_format dict, e.g.
+                         {"type": "json_object"}. Only sent to cloud providers
+                         (NVIDIA NIM, OpenRouter). Local providers (MLX, Ollama)
+                         do not support this parameter and will ignore it.
 
     Returns:
         Raw text content of the model response (stripped).
@@ -224,12 +229,20 @@ def call_llm_with_fallback(
                 "Calling %s (model=%s, timeout=%ds) ...",
                 provider.name, provider.model, total_timeout,
             )
+            # Cloud providers (NVIDIA NIM, OpenRouter) support response_format
+            # for structured JSON output. Local providers (MLX, Ollama) do not.
+            is_cloud = not (is_mlx or provider.name.startswith("Ollama"))
+            extra_kwargs = {}
+            if response_format and is_cloud:
+                extra_kwargs["response_format"] = response_format
+
             response = provider.client.chat.completions.create(
                 model=provider.model,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 messages=messages,
                 timeout=http_timeout,
+                **extra_kwargs,
             )
             raw = (response.choices[0].message.content or "").strip()
             log.info("LLM call succeeded via %s", provider.name)
