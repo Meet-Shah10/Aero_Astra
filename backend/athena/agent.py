@@ -80,21 +80,18 @@ log = logging.getLogger(__name__)
 # Configuration
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Env vars used: OPENROUTER_API_KEY (primary), NVIDIA_API_KEY (fallback)
-# Models: google/gemini-2.5-flash → meta/llama-3.1-70b-instruct
+# Env vars used: NVIDIA_API_KEY (primary cloud fallback), OPENROUTER_API_KEY (secondary)
+# Local models: MLX-LM port 8081 (Llama 3.1 8B) → Ollama → cloud fallback
 DEFAULT_MODEL       = "google/gemini-2.5-flash"
-DEFAULT_TEMPERATURE = 0.15
-DEFAULT_MAX_RETRIES = 3
 
 # 0.15: slightly above SHERLOCK's 0.1 — procedure prose benefits from natural
 # variation, but this is still safety-relevant; must stay below 0.2.
 DEFAULT_TEMPERATURE = 0.15
 
 # Llama 3.1 8B needs enough budget to produce 3 full options + reasoning CoT.
-# 768 was causing empty-body responses — the model ran out of generation budget
-# mid-JSON and mlx_lm returned an empty content string. 1536 is conservative
-# enough to finish a complete response without context-window overflow.
-DEFAULT_MAX_TOKENS  = 1536
+# Must match mlx_servers.py ATHENA --max-tokens (2048). Lower budgets caused
+# empty-body / truncated mid-JSON responses from mlx_lm.
+DEFAULT_MAX_TOKENS  = 2048
 DEFAULT_MAX_RETRIES = 3
 
 # Valid operator effort strings (for schema validation)
@@ -128,8 +125,8 @@ class AthenaAgent:
         max_retries: int = DEFAULT_MAX_RETRIES,
     ) -> None:
         # Build multi-provider fallback chain:
-        # Priority: MLX-LM port 8081 (Mistral speculative) → Ollama → OpenRouter → NVIDIA NIM
-        # Constraint: mlx_port=8081 ensures the tokenizer family stays in the Mistral v3 line.
+        # Priority: MLX-LM port 8081 (Llama 3.1 8B) → Ollama → OpenRouter → NVIDIA NIM
+        # The 8B model at port 8081 uses Llama 3.1 tokenizer (not Mistral).
         self._providers: list[LLMProvider] = build_clients(
             mlx_port=8081,
             ollama_model=ollama_model,
@@ -230,14 +227,34 @@ class AthenaAgent:
         )
 
         # ── Phase 1+2+3: LLM call → Validate → Retry loop ─────────────────────
+        # Attempts 1–2: primary provider chain + corrective reprompt on failure.
+        # Attempt 3: if a fallback exists, reset messages to the original user
+        # prompt and call providers[1:] (skip primary) so polluted history /
+        # same-model retries don't burn the last attempt.
         plan_timestamp = datetime.now(timezone.utc)
         last_error: str = ""
         last_raw: str = ""
-        messages: list[dict[str, str]] = [{"role": "user", "content": user_prompt}]
+        original_messages: list[dict[str, str]] = [{"role": "user", "content": user_prompt}]
+        messages: list[dict[str, str]] = list(original_messages)
 
         for attempt in range(1, self._max_retries + 1):
-            log.info("ATHENA LLM call attempt %d/%d", attempt, self._max_retries)
-            raw = self._call_llm(messages)
+            use_fallback = (
+                attempt == self._max_retries and len(self._providers) > 1
+            )
+            if use_fallback:
+                providers = self._providers[1:]
+                messages = list(original_messages)
+            else:
+                providers = self._providers
+
+            log.info(
+                "ATHENA LLM call attempt %d/%d | providers=%s%s",
+                attempt,
+                self._max_retries,
+                [p.name for p in providers],
+                " (fallback, messages reset)" if use_fallback else "",
+            )
+            raw = self._call_llm(messages, providers=providers)
             last_raw = raw
 
             # ── Phase A: JSON parse ──────────────────────────────────────────
@@ -345,17 +362,26 @@ class AthenaAgent:
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
-    def _call_llm(self, messages: list[dict[str, str]]) -> str:
+    def _call_llm(
+        self,
+        messages: list[dict[str, str]],
+        providers: list[LLMProvider] | None = None,
+    ) -> str:
         """
         Make one LLM call using the multi-provider fallback chain.
         OpenRouter is tried first; on 402/429, NVIDIA NIM is used automatically.
+
+        Args:
+            messages:  Conversation turns (user / assistant), system prompt added here.
+            providers: Optional provider slice; defaults to the full chain.
         """
+        chain = providers if providers is not None else self._providers
         full_messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             *messages,
         ]
         raw = call_llm_with_fallback(
-            self._providers,
+            chain,
             full_messages,
             max_tokens=DEFAULT_MAX_TOKENS,
             temperature=self._temperature,
@@ -375,7 +401,7 @@ class AthenaAgent:
                 "LLM returned empty response — likely token budget exhausted. "
                 "Check DEFAULT_MAX_TOKENS vs. prompt length."
             )
-        log.debug("ATHENA LLM raw response: %s", raw[:400])
+        log.info("ATHENA LLM raw response (first 500 chars): %s", raw[:500])
         return raw
 
     def _try_parse_json(
@@ -384,7 +410,11 @@ class AthenaAgent:
         """
         Attempt to parse raw string as JSON.
         Returns (parsed_dict, None) on success, (None, error_string) on failure.
-        Strips markdown code fences if the LLM wrapped JSON in ```json ... ```.
+
+        Strips markdown code fences if present. On parse failure, extracts the
+        substring from the first '{' to the last '}' and retries (handles prose
+        preamble / trailing text). Unwraps JSON-Schema envelopes the same way
+        SHERLOCK does (type/properties/required).
         """
         cleaned = raw.strip()
         if cleaned.startswith("```"):
@@ -394,13 +424,42 @@ class AthenaAgent:
                 inner = inner[:-1]
             cleaned = "\n".join(inner).strip()
 
-        try:
-            parsed = json.loads(cleaned)
-            if not isinstance(parsed, dict):
-                return None, f"Expected JSON object, got {type(parsed).__name__}"
+        def _loads_and_unwrap(text: str) -> tuple[dict[str, Any] | None, str | None]:
+            try:
+                parsed = json.loads(text)
+                if not isinstance(parsed, dict):
+                    return None, f"Expected JSON object, got {type(parsed).__name__}"
+
+                # ── Schema-envelope unwrap (SHERLOCK pattern) ─────────────────
+                # Small models sometimes echo the JSON Schema structure back
+                # instead of a flat instance:
+                #   { "type": "object", "required": [...], "properties": { ... } }
+                if (
+                    parsed.get("type") == "object"
+                    and isinstance(parsed.get("properties"), dict)
+                    and isinstance(parsed.get("required"), list)
+                ):
+                    parsed = parsed["properties"]
+
+                return parsed, None
+            except json.JSONDecodeError as e:
+                return None, str(e)
+
+        parsed, err = _loads_and_unwrap(cleaned)
+        if parsed is not None:
             return parsed, None
-        except json.JSONDecodeError as e:
-            return None, str(e)
+
+        # Brace extract: prose before/after the JSON object
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            extracted = cleaned[start : end + 1]
+            parsed, err2 = _loads_and_unwrap(extracted)
+            if parsed is not None:
+                return parsed, None
+            return None, err2
+
+        return None, err
 
     def _try_validate_schema(self, parsed: dict[str, Any]) -> str | None:
         """
