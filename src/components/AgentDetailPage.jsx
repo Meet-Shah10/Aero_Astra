@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { gsap } from 'gsap';
 import BorderGlow from './BorderGlow';
 import OracleView from './oracle/OracleView.jsx';
@@ -219,42 +219,46 @@ function SherlockPage({ activeScenario, isAnomaly, hasIncidentData, liveTelemetr
   const edgeRefs = useRef([]);
   const tlRef = useRef(null);
 
-  // chain[0] is always the true root (per FAULT_SCENARIOS) — rendered at the
-  // top. chain[last] is the most downstream, visible symptom — at the
-  // bottom, since that's what an operator actually sees first.
+  // chain[0] is always the true root — rendered at top.
+  // chain[last] is the most downstream visible symptom — at the bottom.
   const chain = activeScenario ? (activeScenario.causalChain ?? []) : [];
   const n = chain.length;
 
-  useLayoutEffect(() => {
-    // Only animate when the graph is actually in the DOM — i.e. the
-    // awaitingActivation gate has dropped AND we have nodes to render.
-    // awaitingActivation is in the dep array so the effect fires when the
-    // gate clears, which is the moment the SVG DOM nodes first exist.
+  // Entrance animation. useEffect (not useLayoutEffect) so it runs AFTER
+  // the browser has painted and SVG node refs are guaranteed populated.
+  // Nodes default to opacity:1 via their natural CSS state, so the graph
+  // is ALWAYS visible even if GSAP is skipped or the animation fails.
+  useEffect(() => {
     if (awaitingActivation || n === 0) return;
-    setSelected(n - 1);
-    nodeRefs.current = nodeRefs.current.slice(0, n);
-    edgeRefs.current = edgeRefs.current.slice(0, n - 1);
 
-    const nodes = nodeRefs.current;
-    const edges = edgeRefs.current;
-    gsap.set(nodes, { scale: 0, opacity: 0, transformOrigin: '50% 50%' });
-    gsap.set(edges, { strokeDashoffset: NODE_GAP });
+    // Confirm every ref is populated before touching GSAP
+    const nodes = nodeRefs.current.slice(0, n).filter(Boolean);
+    const edges = edgeRefs.current.slice(0, n - 1).filter(Boolean);
+    if (nodes.length !== n) return; // refs not ready — skip gracefully
+
+    setSelected(n - 1);
+    if (tlRef.current) tlRef.current.kill();
+
+    // Slide-in from slight offset — nodes are opaque by default so if
+    // animation is skipped they’re still fully visible.
+    gsap.set(nodes, { opacity: 0, y: 10, transformOrigin: '50% 50%' });
+    gsap.set(edges, { opacity: 0 });
 
     const tl = gsap.timeline();
     tlRef.current = tl;
 
-    // Reveal from the bottom (symptom, index n-1) upward to the root (index 0).
+    // Reveal bottom-up: symptom first, root cause last
     for (let i = n - 1; i >= 0; i--) {
-      tl.to(nodes[i], { scale: 1, opacity: 1, duration: 0.35, ease: 'back.out(2)' });
+      tl.to(nodes[i], { opacity: 1, y: 0, duration: 0.28, ease: 'power2.out' });
       if (i > 0) {
-        tl.to(edges[i - 1], { strokeDashoffset: 0, duration: 0.4, ease: 'power2.inOut' }, '-=0.05');
+        tl.to(edges[i - 1], { opacity: 1, duration: 0.22, ease: 'power2.inOut' }, '-=0.05');
       }
       tl.call(() => setSelected(i));
     }
-    tl.to(nodes[0], { duration: 0.15 }); // settle
+    tl.to(nodes[0], { duration: 0.1 });
     tl.call(() => setSelected(0));
 
-    return () => tl.kill();
+    return () => { if (tlRef.current) tlRef.current.kill(); };
   }, [activeScenario, awaitingActivation, n, replayKey]);
 
   // ── Manual activation gate ────────────────────────────────────────────────
