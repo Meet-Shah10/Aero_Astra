@@ -52,7 +52,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from openai import OpenAI
-from backend.llm_client import build_clients, call_llm_with_fallback, LLMProvider
+from backend.llm_client import call_llm_with_fallback, LLMProvider
 
 from backend.oracle.schemas import OracleResponse
 from backend.sherlock.schemas import SherlockDiagnosis
@@ -124,14 +124,46 @@ class AthenaAgent:
         temperature: float = DEFAULT_TEMPERATURE,
         max_retries: int = DEFAULT_MAX_RETRIES,
     ) -> None:
-        # Build multi-provider fallback chain:
-        # Priority: MLX-LM port 8081 (Llama 3.1 8B) → Ollama → OpenRouter → NVIDIA NIM
-        # The 8B model at port 8081 uses Llama 3.1 tokenizer (not Mistral).
-        self._providers: list[LLMProvider] = build_clients(
-            mlx_port=8081,
-            ollama_model=ollama_model,
-            openrouter_model=model,
-        )
+        # Build ATHENA-specific provider chain (cloud-first, not local-first).
+        # MLX-LM 8B was consistently unreliable for ATHENA's large JSON responses
+        # (empty responses, timeouts). NVIDIA NIM provides fast, structured JSON
+        # output and is the reliable choice for ATHENA's planning phase.
+        #
+        # Priority: NVIDIA NIM (nemotron-70b) → NVIDIA NIM (deepseek) → Ollama (local)
+        nv_key     = os.environ.get("NVIDIA_API_KEY")
+        nv_base    = "https://integrate.api.nvidia.com/v1"
+        ollama_base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+        resolved_ollama = ollama_model or os.environ.get("OLLAMA_MODEL", "mistral-nemo:12b")
+
+        self._providers: list[LLMProvider] = []
+
+        # 1. NVIDIA NIM — primary (fast cloud inference, reliable structured JSON)
+        if nv_key:
+            self._providers.append(LLMProvider(
+                name="NVIDIA NIM (nemotron-70b)",
+                client=OpenAI(base_url=nv_base, api_key=nv_key),
+                model="nvidia/nemotron-3-super-120b-a12b",
+            ))
+            log.info("ATHENA provider 1: NVIDIA NIM (nemotron-3-super-120b-a12b)")
+            # 2. NVIDIA NIM deepseek — secondary cloud fallback
+            self._providers.append(LLMProvider(
+                name="NVIDIA NIM (deepseek-fallback)",
+                client=OpenAI(base_url=nv_base, api_key=nv_key),
+                model="deepseek-ai/deepseek-v4-flash-0731",
+            ))
+            log.info("ATHENA provider 2: NVIDIA NIM (deepseek-v4-flash-0731)")
+        else:
+            log.warning("ATHENA: NVIDIA_API_KEY not set — cloud inference unavailable")
+
+        # 3. Ollama — local fallback when cloud is unavailable
+        self._providers.append(LLMProvider(
+            name="Ollama (local)",
+            client=OpenAI(base_url=ollama_base, api_key="ollama"),
+            model=resolved_ollama,
+            timeout_s=180,
+        ))
+        log.info("ATHENA provider %d: Ollama local (%s)", len(self._providers), resolved_ollama)
+
         self._temperature = temperature
         self._max_retries = max_retries
 
